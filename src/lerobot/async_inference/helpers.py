@@ -236,6 +236,9 @@ class TimedObservation(TimedData):
     observation: RawObservation
     must_go: bool = False
     client_send_timestamp: float | None = None
+    # Stable logical request identifier used to recover an action chunk when
+    # the transport disconnects after inference but before client delivery.
+    request_id: str | None = None
 
     def get_observation(self):
         return self.observation

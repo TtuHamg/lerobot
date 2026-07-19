@@ -15,10 +15,11 @@ from .contract import (
     validate_absolute_action,
 )
 from .dry_run import DryRunBackend
+from .ros2_backend import Ros2Backend
 
 
 class FrankaRos(Robot):
-    """Phase 1 Franka adapter backed only by a fixture and JSONL sink."""
+    """Franka adapter with dry-run and isolated, non-actuating ROS2 backends."""
 
     config_class = FrankaRosConfig
     name = "franka_ros"
@@ -26,11 +27,14 @@ class FrankaRos(Robot):
     def __init__(self, config: FrankaRosConfig):
         super().__init__(config)
         self.config = config
-        self._backend = DryRunBackend(
-            fixture_path=config.fixture_path,
-            action_log_path=config.action_log_path,
-            robot_id=config.id,
-        )
+        if config.dry_run:
+            self._backend: DryRunBackend | Ros2Backend = DryRunBackend(
+                fixture_path=config.fixture_path,
+                action_log_path=config.action_log_path,
+                robot_id=config.id,
+            )
+        else:
+            self._backend = Ros2Backend(config=config)
 
     @property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
@@ -51,10 +55,10 @@ class FrankaRos(Robot):
         return True
 
     def calibrate(self) -> None:
-        """No calibration is performed by the non-actuating Phase 1 backend."""
+        """No calibration is performed by either non-actuating backend."""
 
     def configure(self) -> None:
-        """No hardware configuration exists in Phase 1."""
+        """No controller or hardware configuration is performed here."""
 
     @check_if_already_connected
     def connect(self, calibrate: bool = True) -> None:
@@ -72,6 +76,42 @@ class FrankaRos(Robot):
             quaternion_norm_tolerance=self.config.quaternion_norm_tolerance,
         )
         return self._backend.send_action(ordered_action)
+
+    @check_if_not_connected
+    def publish_action_chunk(
+        self,
+        timed_actions,
+        *,
+        source_observation_timestep: int,
+        source_observation_timestamp: float,
+        period_s: float,
+    ):
+        """Publish one complete absolute plan through the isolated ROS2 topic."""
+
+        if not isinstance(self._backend, Ros2Backend):
+            raise RuntimeError("Action chunk publication is only available in ROS2 interface mode")
+        return self._backend.publish_action_chunk(
+            timed_actions,
+            source_observation_timestep=source_observation_timestep,
+            source_observation_timestamp=source_observation_timestamp,
+            period_s=period_s,
+        )
+
+    @check_if_not_connected
+    def get_qpos(self):
+        """Return the seven-joint ROS sideband without changing PI0 state10."""
+
+        if not isinstance(self._backend, Ros2Backend):
+            raise RuntimeError("qpos sideband is only available in ROS2 interface mode")
+        return self._backend.get_qpos()
+
+    @check_if_not_connected
+    def get_ros_sideband(self):
+        """Return copied ROS timing, EEF, qpos, and gripper diagnostics."""
+
+        if not isinstance(self._backend, Ros2Backend):
+            raise RuntimeError("ROS sideband is only available in ROS2 interface mode")
+        return self._backend.get_sideband()
 
     @check_if_not_connected
     def disconnect(self) -> None:

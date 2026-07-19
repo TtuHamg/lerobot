@@ -145,6 +145,11 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
         )
 
         response = client.stub.GetActions(services_pb2.Empty(), timeout=5.0)
+        # Simulate losing the first response before the client can ACK it. The
+        # server must replay the exact cached delivery instead of filtering the
+        # observation as "already predicted" and blocking forever.
+        replay = client.stub.GetActions(services_pb2.Empty(), timeout=5.0)
+        assert replay.SerializeToString() == response.SerializeToString()
         timed_actions = pickle.loads(response.data)  # nosec: trusted in-process test server
         assert len(timed_actions) == 2
         absolute = torch.stack([item.get_action() for item in timed_actions])
@@ -157,6 +162,9 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
         )
 
         client._aggregate_action_queues(timed_actions, client.config.aggregate_fn)
+        client._ack_action_delivery(response)
+        assert policy_server._pending_delivery is None
+        assert response.source_timestep in policy_server._predicted_timesteps
         client.control_loop_action()
         client.control_loop_action()
     finally:

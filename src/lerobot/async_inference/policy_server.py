@@ -32,11 +32,13 @@ import logging
 import pickle  # nosec
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from concurrent import futures
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pformat
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any
 
 import draccus
@@ -67,6 +69,17 @@ from .helpers import (
 )
 
 
+_MAX_DELIVERY_TOMBSTONES = 1024
+
+
+@dataclass(frozen=True)
+class _PendingActionDelivery:
+    request_id: str
+    chunk_id: str
+    source_timestep: int
+    response: Any
+
+
 class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
     prefix = "policy_server"
     logger = get_logger(prefix)
@@ -80,8 +93,17 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.observation_queue = Queue(maxsize=1)
 
-        self._predicted_timesteps_lock = threading.Lock()
+        # A generated chunk is not considered delivered until AckActions is
+        # received. The same lock protects all delivery state transitions.
+        self._predicted_timesteps_lock = threading.RLock()
         self._predicted_timesteps = set()
+        self._queued_timesteps: set[int] = set()
+        self._queued_request_ids: set[str] = set()
+        self._inflight_timesteps: set[int] = set()
+        self._inflight_request_ids: set[str] = set()
+        self._generated_timesteps: set[int] = set()
+        self._pending_delivery: _PendingActionDelivery | None = None
+        self._delivered_chunks: OrderedDict[str, tuple[str, int]] = OrderedDict()
 
         self.last_processed_obs = None
 
@@ -96,6 +118,12 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
         self._loaded_policy_setup_key = None
         self._policy_setup_lock = threading.Lock()
+        # gRPC may dispatch overlapping GetActions calls to different worker
+        # threads during reconnects. Only one call may consume an observation
+        # and create the single READY_UNACKED delivery at a time.
+        self._get_actions_lock = threading.Lock()
+        self._enqueue_observation_lock = threading.Lock()
+        self._session_generation = 0
 
     @property
     def running(self):
@@ -184,12 +212,23 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         with self._predicted_timesteps_lock:
             self._predicted_timesteps = set()
+            self._queued_timesteps = set()
+            self._queued_request_ids = set()
+            self._inflight_timesteps = set()
+            self._inflight_request_ids = set()
+            self._generated_timesteps = set()
+            self._pending_delivery = None
+            self._delivered_chunks = OrderedDict()
+            self.last_processed_obs = None
 
     def Ready(self, request, context):  # noqa: N802
         client_id = context.peer()
         self.logger.info(f"Client {client_id} connected and ready")
-        self._reset_server()
-        self.shutdown_event.clear()
+        with self._get_actions_lock:
+            with self._enqueue_observation_lock:
+                self._session_generation += 1
+                self._reset_server()
+                self.shutdown_event.clear()
 
         return services_pb2.Empty()
 
@@ -267,6 +306,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         """Receive observations from the robot client"""
         client_id = context.peer()
         self.logger.debug(f"Receiving observations from {client_id}")
+        with self._enqueue_observation_lock:
+            session_generation = self._session_generation
 
         start_deserialize = time.perf_counter()
         received_bytes = receive_bytes_in_chunks(
@@ -307,28 +348,122 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         )
 
         if not self._enqueue_observation(
-            timed_observation  # wrapping a RawObservation
+            timed_observation,  # wrapping a RawObservation
+            session_generation=session_generation,
         ):
             self.logger.debug(f"Observation #{obs_timestep} has been filtered out")
 
         return services_pb2.Empty()
 
+    @staticmethod
+    def _observation_request_id(obs: TimedObservation) -> str | None:
+        request_id = getattr(obs, "request_id", None)
+        if request_id is None:
+            return None
+        if not isinstance(request_id, str) or not request_id:
+            raise ValueError("TimedObservation.request_id must be a non-empty string when provided")
+        return request_id
+
+    def _pending_action_response(self):
+        with self._predicted_timesteps_lock:
+            pending = self._pending_delivery
+            return None if pending is None else pending.response
+
+    def AckActions(self, request, context):  # noqa: N802
+        """Commit one generated chunk after the client has processed it locally."""
+
+        request_id = str(request.request_id)
+        chunk_id = str(request.chunk_id)
+        source_timestep = int(request.source_timestep)
+        if not request_id or not chunk_id:
+            self.logger.warning("Ignoring action delivery ACK with an empty request_id/chunk_id")
+            return services_pb2.Empty()
+
+        with self._predicted_timesteps_lock:
+            pending = self._pending_delivery
+            if pending is not None and (
+                pending.request_id == request_id
+                and pending.chunk_id == chunk_id
+                and pending.source_timestep == source_timestep
+            ):
+                self._pending_delivery = None
+                self._generated_timesteps.discard(source_timestep)
+                self._predicted_timesteps.add(source_timestep)
+                self._delivered_chunks[chunk_id] = (request_id, source_timestep)
+                self._delivered_chunks.move_to_end(chunk_id)
+                while len(self._delivered_chunks) > _MAX_DELIVERY_TOMBSTONES:
+                    self._delivered_chunks.popitem(last=False)
+                self.logger.info(
+                    "Action chunk #%s acknowledged by client (chunk_id=%s)",
+                    source_timestep,
+                    chunk_id,
+                )
+                return services_pb2.Empty()
+
+            delivered = self._delivered_chunks.get(chunk_id)
+            if delivered == (request_id, source_timestep):
+                self.logger.debug("Duplicate ACK for committed action chunk %s", chunk_id)
+                return services_pb2.Empty()
+
+        # Do not clear any state for an unknown or mismatched ACK. The pending
+        # chunk will be redelivered, allowing the client to retry safely.
+        self.logger.warning(
+            "Ignoring unmatched action delivery ACK: request_id=%s chunk_id=%s timestep=%s",
+            request_id,
+            chunk_id,
+            source_timestep,
+        )
+        return services_pb2.Empty()
+
     def GetActions(self, request, context):  # noqa: N802
+        with self._get_actions_lock:
+            return self._get_actions_serialized(request, context)
+
+    def _get_actions_serialized(self, request, context):
         """Returns actions to the robot client. Actions are sent as a single
-        chunk, containing multiple actions."""
+        chunk, containing multiple actions.
+
+        For ACK-capable clients, a generated response is cached before this
+        RPC returns and is replayed byte-for-byte until AckActions commits it.
+        """
         client_id = context.peer()
         self.logger.debug(f"Client {client_id} connected for action streaming")
 
+        pending_response = self._pending_action_response()
+        if pending_response is not None:
+            self.logger.info(
+                "Redelivering unacknowledged action chunk #%s (chunk_id=%s)",
+                pending_response.source_timestep,
+                pending_response.chunk_id,
+            )
+            return pending_response
+
         # Generate action based on the most recent observation and its timestep
+        obs = None
+        request_id = None
+        source_timestep = None
+        legacy_prediction_marked = False
         try:
             getactions_starts = time.perf_counter()
             obs = self.observation_queue.get(timeout=self.config.obs_queue_timeout)
+            request_id = self._observation_request_id(obs)
+            source_timestep = int(obs.get_timestep())
+
+            with self._predicted_timesteps_lock:
+                self._queued_timesteps.discard(source_timestep)
+                if request_id is not None:
+                    self._queued_request_ids.discard(request_id)
+                    self._inflight_timesteps.add(source_timestep)
+                    self._inflight_request_ids.add(request_id)
+                else:
+                    # Preserve compatibility with clients that do not attach a
+                    # request ID and therefore cannot acknowledge delivery.
+                    self._predicted_timesteps.add(source_timestep)
+                    legacy_prediction_marked = True
+
             self.logger.info(
                 f"Running inference for observation #{obs.get_timestep()} (must_go: {obs.must_go})"
             )
-
-            with self._predicted_timesteps_lock:
-                self._predicted_timesteps.add(obs.get_timestep())
 
             start_time = time.perf_counter()
             action_chunk = self._predict_action_chunk(obs)
@@ -341,8 +476,32 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             actions_bytes = pickle.dumps(action_chunk)  # nosec
             serialize_time = time.perf_counter() - start_time
 
-            # Create and return the action chunk
-            actions = services_pb2.Actions(data=actions_bytes)
+            # Cache the exact response before returning it. A disconnect in the
+            # response window then leaves a replayable READY_UNACKED result.
+            if request_id is None:
+                actions = services_pb2.Actions(data=actions_bytes)
+            else:
+                chunk_id = uuid.uuid4().hex
+                actions = services_pb2.Actions(
+                    data=actions_bytes,
+                    request_id=request_id,
+                    chunk_id=chunk_id,
+                    source_timestep=source_timestep,
+                )
+                with self._predicted_timesteps_lock:
+                    self._inflight_timesteps.discard(source_timestep)
+                    self._inflight_request_ids.discard(request_id)
+                    self._generated_timesteps.add(source_timestep)
+                    self._pending_delivery = _PendingActionDelivery(
+                        request_id=request_id,
+                        chunk_id=chunk_id,
+                        source_timestep=source_timestep,
+                        response=actions,
+                    )
+
+            # Similarity filtering should only use observations for which a
+            # complete action chunk was successfully generated.
+            self.last_processed_obs = obs
 
             self.logger.info(
                 f"Action chunk #{obs.get_timestep()} generated | "
@@ -366,6 +525,16 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             return services_pb2.Empty()
 
         except Exception as e:
+            if source_timestep is not None:
+                with self._predicted_timesteps_lock:
+                    self._queued_timesteps.discard(source_timestep)
+                    self._inflight_timesteps.discard(source_timestep)
+                    if request_id is not None:
+                        self._queued_request_ids.discard(request_id)
+                        self._inflight_request_ids.discard(request_id)
+                    elif legacy_prediction_marked:
+                        # An inference failure must not poison this timestep.
+                        self._predicted_timesteps.discard(source_timestep)
             self.logger.error(f"Error in StreamActions: {e}")
 
             return services_pb2.Empty()
@@ -373,10 +542,18 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
     def _obs_sanity_checks(self, obs: TimedObservation, previous_obs: TimedObservation) -> bool:
         """Check if the observation is valid to be processed by the policy"""
         with self._predicted_timesteps_lock:
-            predicted_timesteps = self._predicted_timesteps
+            reserved_timesteps = (
+                self._predicted_timesteps
+                | self._queued_timesteps
+                | self._inflight_timesteps
+                | self._generated_timesteps
+            )
 
-        if obs.get_timestep() in predicted_timesteps:
-            self.logger.debug(f"Skipping observation #{obs.get_timestep()} - Timestep predicted already!")
+        if obs.get_timestep() in reserved_timesteps:
+            self.logger.debug(
+                "Skipping observation #%s - timestep is already queued, predicting, generated, or delivered",
+                obs.get_timestep(),
+            )
             return False
 
         elif observations_similar(obs, previous_obs, lerobot_features=self.lerobot_features):
@@ -388,14 +565,60 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         else:
             return True
 
-    def _enqueue_observation(self, obs: TimedObservation) -> bool:
+    def _enqueue_observation(
+        self,
+        obs: TimedObservation,
+        *,
+        session_generation: int | None = None,
+    ) -> bool:
+        with self._enqueue_observation_lock:
+            if (
+                session_generation is not None
+                and session_generation != self._session_generation
+            ):
+                self.logger.info(
+                    "Dropping observation #%s from stale session generation %s (current=%s)",
+                    obs.get_timestep(),
+                    session_generation,
+                    self._session_generation,
+                )
+                return False
+            return self._enqueue_observation_serialized(obs)
+
+    def _enqueue_observation_serialized(self, obs: TimedObservation) -> bool:
         """Enqueue an observation if it must go through processing, otherwise skip it.
         Observations not in queue are never run through the policy network"""
 
-        if (
-            obs.must_go
-            or self.last_processed_obs is None
-            or self._obs_sanity_checks(obs, self.last_processed_obs)
+        request_id = self._observation_request_id(obs)
+        timestep = int(obs.get_timestep())
+        with self._predicted_timesteps_lock:
+            request_already_seen = request_id is not None and (
+                request_id in self._queued_request_ids
+                or request_id in self._inflight_request_ids
+                or (
+                    self._pending_delivery is not None
+                    and self._pending_delivery.request_id == request_id
+                )
+                or any(delivered[0] == request_id for delivered in self._delivered_chunks.values())
+            )
+            timestep_reserved = timestep in (
+                self._predicted_timesteps
+                | self._queued_timesteps
+                | self._inflight_timesteps
+                | self._generated_timesteps
+            )
+
+        # must_go controls similarity filtering, not delivery idempotency.
+        if request_already_seen or timestep_reserved:
+            self.logger.debug(
+                "Skipping duplicate observation #%s (request_id=%s)",
+                timestep,
+                request_id or "legacy",
+            )
+            return False
+
+        if obs.must_go or self.last_processed_obs is None or self._obs_sanity_checks(
+            obs, self.last_processed_obs
         ):
             last_obs = self.last_processed_obs.get_timestep() if self.last_processed_obs else "None"
             self.logger.debug(
@@ -405,11 +628,35 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             # If queue is full, get the old observation to make room
             if self.observation_queue.full():
                 # pops from queue
-                _ = self.observation_queue.get_nowait()
-                self.logger.debug("Observation queue was full, removed oldest observation")
+                try:
+                    removed = self.observation_queue.get_nowait()
+                except Empty:
+                    # GetActions won the race and consumed the old value.
+                    pass
+                else:
+                    removed_request_id = self._observation_request_id(removed)
+                    with self._predicted_timesteps_lock:
+                        self._queued_timesteps.discard(int(removed.get_timestep()))
+                        if removed_request_id is not None:
+                            self._queued_request_ids.discard(removed_request_id)
+                    self.logger.debug("Observation queue was full, removed oldest observation")
 
-            # Now put the new observation (never blocks as queue is non-full here)
-            self.observation_queue.put(obs)
+            # Register the reservation before publishing the value to the
+            # Queue. GetActions can wake immediately after put_nowait(); doing
+            # this in the opposite order can leave stale queued bookkeeping.
+            with self._predicted_timesteps_lock:
+                self._queued_timesteps.add(timestep)
+                if request_id is not None:
+                    self._queued_request_ids.add(request_id)
+
+            try:
+                self.observation_queue.put_nowait(obs)
+            except Full:
+                with self._predicted_timesteps_lock:
+                    self._queued_timesteps.discard(timestep)
+                    if request_id is not None:
+                        self._queued_request_ids.discard(request_id)
+                raise
             return True
 
         return False
@@ -455,7 +702,6 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         """2. Apply preprocessor"""
         start_preprocess = time.perf_counter()
         observation = self.preprocessor(observation)
-        self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
 
         """3. Get action chunk"""

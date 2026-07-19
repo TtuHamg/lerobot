@@ -210,14 +210,52 @@ def test_action_validation_is_strict(tmp_path: Path, mutate, error_type: type[Ex
     robot.disconnect()
 
 
-def test_non_dry_run_fails_closed(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="requires dry_run=true"):
+def test_non_dry_run_only_allows_isolated_ros2_interface(tmp_path: Path) -> None:
+    config = FrankaRosConfig(
+        id="ros2-interface",
+        calibration_dir=tmp_path / "calibration",
+        dry_run=False,
+    )
+    assert config.ros2_interface_only is True
+    assert config.action_chunk_topic.startswith("/lerobot/")
+
+    with pytest.raises(ValueError, match="actuation is not implemented"):
         FrankaRosConfig(
             id="unsafe",
             calibration_dir=tmp_path / "calibration",
             dry_run=False,
+            ros2_interface_only=False,
+        )
+
+    with pytest.raises(ValueError, match="only valid when dry_run=true"):
+        FrankaRosConfig(
+            id="mixed-backends",
+            calibration_dir=tmp_path / "calibration",
+            dry_run=False,
             fixture_path=tmp_path / "unused.npz",
-            action_log_path=tmp_path / "unused.jsonl",
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "match"),
+    [
+        ({"max_observation_age_s": float("nan")}, "finite and greater than zero"),
+        ({"action_chunk_validity_s": float("inf")}, "finite and greater than zero"),
+        ({"gripper_closed_position": float("nan")}, "finite real values"),
+        ({"observation_buffer_size": True}, "at least 2"),
+    ],
+)
+def test_ros2_config_rejects_non_finite_or_boolean_numeric_values(
+    tmp_path: Path,
+    override: dict,
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        FrankaRosConfig(
+            id="bad-ros2-numeric",
+            calibration_dir=tmp_path / "calibration",
+            dry_run=False,
+            **override,
         )
 
 

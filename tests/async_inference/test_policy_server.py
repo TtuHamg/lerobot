@@ -18,6 +18,10 @@ Monkey-patch the `policy` attribute with a stub so that no real model inference 
 from __future__ import annotations
 
 import time
+import pickle  # nosec: tests exercise the trusted internal transport payload
+from concurrent import futures
+from queue import Queue
+from threading import Event
 
 import pytest
 import torch
@@ -93,7 +97,12 @@ def policy_server():
 # -----------------------------------------------------------------------------
 
 
-def _make_obs(state: torch.Tensor, timestep: int = 0, must_go: bool = False):
+def _make_obs(
+    state: torch.Tensor,
+    timestep: int = 0,
+    must_go: bool = False,
+    request_id: str | None = None,
+):
     """Create a TimedObservation with a given state vector."""
     # Import only when needed
     from lerobot.async_inference.helpers import TimedObservation
@@ -110,6 +119,7 @@ def _make_obs(state: torch.Tensor, timestep: int = 0, must_go: bool = False):
         timestamp=time.time(),
         timestep=timestep,
         must_go=must_go,
+        request_id=request_id,
     )
 
 
@@ -263,3 +273,208 @@ def test_predict_action_chunk(monkeypatch, policy_server):
     for i, ta in enumerate(timed_actions):
         expected_ts = obs.get_timestamp() + i * policy_server.config.environment_dt
         assert abs(ta.get_timestamp() - expected_ts) < 1e-6
+
+
+def test_action_delivery_is_redelivered_until_client_ack(monkeypatch, policy_server):
+    """A lost GetActions response must not poison or discard the generated chunk."""
+    from types import SimpleNamespace
+
+    from lerobot.async_inference.helpers import TimedAction
+    from lerobot.transport import services_pb2
+
+    inference_calls = 0
+
+    def _fake_predict(obs):
+        nonlocal inference_calls
+        inference_calls += 1
+        return [
+            TimedAction(
+                timestamp=obs.get_timestamp(),
+                timestep=obs.get_timestep(),
+                action=torch.zeros(6),
+            )
+        ]
+
+    monkeypatch.setattr(policy_server, "_predict_action_chunk", _fake_predict)
+    obs = _make_obs(torch.zeros(6), timestep=588, must_go=True, request_id="session:588")
+    assert policy_server._enqueue_observation(obs) is True
+
+    context = SimpleNamespace(peer=lambda: "test-client")
+    first = policy_server.GetActions(services_pb2.Empty(), context)
+    assert first.request_id == "session:588"
+    assert first.chunk_id
+    assert first.source_timestep == 588
+    assert inference_calls == 1
+    assert 588 not in policy_server._predicted_timesteps
+
+    # Simulate losing the first response: poll again without an ACK.
+    replay = policy_server.GetActions(services_pb2.Empty(), context)
+    assert replay.SerializeToString() == first.SerializeToString()
+    assert inference_calls == 1
+    assert 588 not in policy_server._predicted_timesteps
+
+    policy_server.AckActions(
+        services_pb2.ActionDeliveryAck(
+            request_id=first.request_id,
+            chunk_id=first.chunk_id,
+            source_timestep=first.source_timestep,
+        ),
+        context,
+    )
+    assert policy_server._pending_delivery is None
+    assert 588 in policy_server._predicted_timesteps
+
+    # ACK retries are idempotent.
+    policy_server.AckActions(
+        services_pb2.ActionDeliveryAck(
+            request_id=first.request_id,
+            chunk_id=first.chunk_id,
+            source_timestep=first.source_timestep,
+        ),
+        context,
+    )
+    assert 588 in policy_server._predicted_timesteps
+
+
+def test_duplicate_must_go_observation_does_not_repeat_unacked_inference(
+    monkeypatch, policy_server
+):
+    from types import SimpleNamespace
+
+    from lerobot.async_inference.helpers import TimedAction
+    from lerobot.transport import services_pb2
+
+    monkeypatch.setattr(
+        policy_server,
+        "_predict_action_chunk",
+        lambda obs: [
+            TimedAction(
+                timestamp=obs.get_timestamp(),
+                timestep=obs.get_timestep(),
+                action=torch.zeros(6),
+            )
+        ],
+    )
+    first_obs = _make_obs(torch.zeros(6), timestep=7, must_go=True, request_id="request-a")
+    assert policy_server._enqueue_observation(first_obs) is True
+    response = policy_server.GetActions(
+        services_pb2.Empty(), SimpleNamespace(peer=lambda: "test-client")
+    )
+    assert response.chunk_id
+
+    duplicate = _make_obs(torch.ones(6), timestep=7, must_go=True, request_id="request-b")
+    assert policy_server._enqueue_observation(duplicate) is False
+
+
+def test_inference_failure_does_not_permanently_reserve_timestep(monkeypatch, policy_server):
+    from types import SimpleNamespace
+
+    from lerobot.transport import services_pb2
+
+    obs = _make_obs(torch.zeros(6), timestep=9, must_go=True, request_id="retryable-request")
+    assert policy_server._enqueue_observation(obs) is True
+
+    def _fail(_obs):
+        raise RuntimeError("injected inference failure")
+
+    monkeypatch.setattr(policy_server, "_predict_action_chunk", _fail)
+    response = policy_server.GetActions(
+        services_pb2.Empty(), SimpleNamespace(peer=lambda: "test-client")
+    )
+    assert isinstance(response, services_pb2.Empty)
+    assert 9 not in policy_server._predicted_timesteps
+    assert 9 not in policy_server._inflight_timesteps
+    assert policy_server._enqueue_observation(obs) is True
+
+
+def test_concurrent_get_actions_replays_single_pending_delivery(monkeypatch, policy_server):
+    from types import SimpleNamespace
+
+    from lerobot.async_inference.helpers import TimedAction
+    from lerobot.transport import services_pb2
+
+    inference_started = Event()
+    release_inference = Event()
+    inference_calls = 0
+
+    def _blocking_predict(obs):
+        nonlocal inference_calls
+        inference_calls += 1
+        inference_started.set()
+        assert release_inference.wait(timeout=2.0)
+        return [
+            TimedAction(
+                timestamp=obs.get_timestamp(),
+                timestep=obs.get_timestep(),
+                action=torch.zeros(6),
+            )
+        ]
+
+    monkeypatch.setattr(policy_server, "_predict_action_chunk", _blocking_predict)
+    first_obs = _make_obs(torch.zeros(6), timestep=20, must_go=True, request_id="request-20")
+    second_obs = _make_obs(torch.ones(6), timestep=21, must_go=True, request_id="request-21")
+    assert policy_server._enqueue_observation(first_obs) is True
+    context = SimpleNamespace(peer=lambda: "test-client")
+
+    with futures.ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(policy_server.GetActions, services_pb2.Empty(), context)
+        assert inference_started.wait(timeout=2.0)
+        assert policy_server._enqueue_observation(second_obs) is True
+        second_future = executor.submit(policy_server.GetActions, services_pb2.Empty(), context)
+        release_inference.set()
+        first = first_future.result(timeout=2.0)
+        second = second_future.result(timeout=2.0)
+
+    assert first.SerializeToString() == second.SerializeToString()
+    assert inference_calls == 1
+    assert policy_server.observation_queue.qsize() == 1
+
+
+def test_observation_reservation_is_registered_before_queue_visibility(policy_server):
+    class _InspectingQueue(Queue):
+        def put_nowait(self, item):
+            assert item.get_timestep() in policy_server._queued_timesteps
+            assert item.request_id in policy_server._queued_request_ids
+            return super().put_nowait(item)
+
+    policy_server.observation_queue = _InspectingQueue(maxsize=1)
+    obs = _make_obs(torch.zeros(6), timestep=30, must_go=True, request_id="request-30")
+
+    assert policy_server._enqueue_observation(obs) is True
+
+
+def test_ready_drops_observation_from_an_older_stream(policy_server):
+    from types import SimpleNamespace
+
+    from lerobot.transport import services_pb2
+    from lerobot.transport.utils import send_bytes_in_chunks
+
+    stream_entered = Event()
+    release_old_stream = Event()
+    old_observation = _make_obs(
+        torch.zeros(6),
+        timestep=40,
+        must_go=True,
+        request_id="old-session:40",
+    )
+
+    def _blocked_old_stream():
+        stream_entered.set()
+        assert release_old_stream.wait(timeout=2.0)
+        yield from send_bytes_in_chunks(
+            pickle.dumps(old_observation),
+            services_pb2.Observation,
+        )
+
+    context = SimpleNamespace(peer=lambda: "test-client")
+    with futures.ThreadPoolExecutor(max_workers=1) as executor:
+        old_rpc = executor.submit(policy_server.SendObservations, _blocked_old_stream(), context)
+        assert stream_entered.wait(timeout=2.0)
+
+        policy_server.Ready(services_pb2.Empty(), context)
+        release_old_stream.set()
+        old_rpc.result(timeout=2.0)
+
+    assert policy_server.observation_queue.empty()
+    assert not policy_server._queued_timesteps
+    assert not policy_server._queued_request_ids

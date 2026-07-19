@@ -254,6 +254,11 @@ class AsyncInferenceStub:
                 request_serializer=lerobot_dot_transport_dot_services__pb2.Empty.SerializeToString,
                 response_deserializer=lerobot_dot_transport_dot_services__pb2.Actions.FromString,
                 _registered_method=True)
+        self.AckActions = channel.unary_unary(
+                '/transport.AsyncInference/AckActions',
+                request_serializer=lerobot_dot_transport_dot_services__pb2.ActionDeliveryAck.SerializeToString,
+                response_deserializer=lerobot_dot_transport_dot_services__pb2.Empty.FromString,
+                _registered_method=True)
         self.SendPolicyInstructions = channel.unary_unary(
                 '/transport.AsyncInference/SendPolicyInstructions',
                 request_serializer=lerobot_dot_transport_dot_services__pb2.PolicySetup.SerializeToString,
@@ -285,6 +290,12 @@ class AsyncInferenceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AckActions(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SendPolicyInstructions(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -309,6 +320,11 @@ def add_AsyncInferenceServicer_to_server(servicer, server):
                     servicer.GetActions,
                     request_deserializer=lerobot_dot_transport_dot_services__pb2.Empty.FromString,
                     response_serializer=lerobot_dot_transport_dot_services__pb2.Actions.SerializeToString,
+            ),
+            'AckActions': grpc.unary_unary_rpc_method_handler(
+                    servicer.AckActions,
+                    request_deserializer=lerobot_dot_transport_dot_services__pb2.ActionDeliveryAck.FromString,
+                    response_serializer=lerobot_dot_transport_dot_services__pb2.Empty.SerializeToString,
             ),
             'SendPolicyInstructions': grpc.unary_unary_rpc_method_handler(
                     servicer.SendPolicyInstructions,
@@ -377,6 +393,33 @@ class AsyncInference:
             '/transport.AsyncInference/GetActions',
             lerobot_dot_transport_dot_services__pb2.Empty.SerializeToString,
             lerobot_dot_transport_dot_services__pb2.Actions.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AckActions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/transport.AsyncInference/AckActions',
+            lerobot_dot_transport_dot_services__pb2.ActionDeliveryAck.SerializeToString,
+            lerobot_dot_transport_dot_services__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,

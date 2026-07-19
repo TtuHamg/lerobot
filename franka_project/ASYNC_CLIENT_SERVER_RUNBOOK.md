@@ -1,8 +1,9 @@
 # Franka PI0 client-server dry-run runbook
 
-本 runbook 只覆盖已经批准的第一阶段：LeRobot client 与 PI0 server 异步通信。Franka
-插件读取冻结 observation fixture，并把返回动作写入 JSONL；它不会 import ROS、连接
-controller 或驱动真机。
+本 runbook 只覆盖已经批准的第一阶段：LeRobot client 与 PI0 server 异步通信。
+本文命令让 Franka 插件读取冻结 observation fixture，并把返回动作写入 JSONL；
+它不会 import ROS、连接 controller 或驱动真机。后续新增的非执行 ROS2 interface 另见
+[`ROS2_INTERFACE.md`](./ROS2_INTERFACE.md)，不改变本文 dry-run 验收范围。
 
 ## 固定拓扑
 
@@ -23,17 +24,23 @@ KML URL 使用 `wss://.../ws`，不追加 `:16782`。`16782` 是 gateway 在 KML
 ## 当前外部阻塞（2026-07-17）
 
 对上述 `/ws` 发起实际 WebSocket Upgrade 时，KML AccessProxy 返回 HTTP `302` 并重定向
-到公司 SSO；请求没有到达正在监听的 tunnel server，因此目前只能完成本机同拓扑验证，
-不能声称远端 KML E2E 已通过。
+到公司 SSO；未认证的请求不会到达正在监听的 tunnel server。当前有人值守的
+推荐流程是：用户先在日常 Firefox 中正常完成公司 SSO/MFA，再由
+`tools/start_kml_tunnel_client.py` 只读已有 profile 的 `cookies.sqlite`，只选取对
+目标 KML host/path 有效的 Cookie，供后续 gRPC 连接和重连内存复用。
 
-在机器人侧运行前，需要 KML 平台提供以下任一种能力：
+这不是绕过 SSO/MFA。launcher 不会打印 Cookie，也不会把它放进命令行或写入长期
+cookie 文件。它通过 `KML_COOKIE` 初始进程环境把 Cookie 传给 tunnel，tunnel 读取后立即
+从 Python 的 `os.environ` 映射删除，并仅在进程内存中使用。Linux 上同一用户或特权进程
+仍可能通过 `/proc/<pid>/environ` 或进程内存观察初始环境，因此这不是抵御本机同权限用户的
+secret boundary。若 Firefox 数据库被锁定，launcher 会在临时目录中建立
+`cookies.sqlite`/WAL 稳定快照，读取后自动删除。
+该流程可用于当前有人值守的 remote dry-run 验收，但在实际验收完成前仍不能声称
+远端 KML E2E 已通过。
 
-- 允许该 route 进行非浏览器 WebSocket/machine-to-machine 访问；或
-- 提供平台正式支持的 machine token/header 认证方式。
-
-不要把浏览器 SSO cookie 写进脚本：它会过期，也不适合作为机器人通信凭证。可用 route 的
-验收标志是 WebSocket Upgrade 返回 `101 Switching Protocols`，并且 tunnel server 打印
-`websocket connected ... path=/ws`。
+长期无人值守运行的外部阻塞仍未解决。该场景应向 KML 平台申请正式支持的
+machine token、mTLS 或等价的 machine-to-machine 身份，不应把人类 SSO Cookie 当作机器人
+的长期通信凭证。
 
 ## 1. 安装 out-of-tree 插件
 
@@ -132,18 +139,64 @@ python tools/ws_tcp_tunnel.py server \
   --target-port=15173
 ```
 
+该 tunnel server 没有应用层认证或 ACL，只能运行在由 KML AccessProxy 和网络 ACL 保护的
+实验环境中，不得直接暴露到公网或宽泛可访问的公司网络。其后端 PolicyServer 使用 Python
+pickle 传输内部对象，只能接受受信任的 LeRobot client；不得把 `16782` 或 `15173` 作为
+公共服务端口开放。
+
 ## 4. 机器人侧：启动 tunnel client
 
-确认 KML route 已解决上述 SSO 问题后执行：
+先使用当前 Unix 用户的日常 Firefox 访问 KML 目标机器，正常完成 SSO 和 MFA。
+确认该 Firefox profile 中已有有效 KML 会话后，在当前机器执行：
 
 ```bash
-cd /path/to/lerobot
+source /home/pnp/miniconda3/etc/profile.d/conda.sh
+conda activate lerobot
+cd /home/pnp/Projects/lerobot
 
-python tools/ws_tcp_tunnel.py client \
+python tools/start_kml_tunnel_client.py \
   --listen-host=127.0.0.1 \
   --listen-port=8080 \
   --ws-url=wss://kml-dtmachine-27353-prod-0.kmlhb2az1l3-2.corp.kuaishou.com/ws
 ```
+
+默认会从 `~/snap/firefox/common/.mozilla/firefox` 和 `~/.mozilla/firefox` 中自动查找
+Firefox 默认 profile。如果有多个 profile 并且自动选择不正确，显式指定：
+
+```bash
+python tools/start_kml_tunnel_client.py \
+  --cookie-db=/absolute/path/to/firefox/profile/cookies.sqlite
+```
+
+有效 Cookie 已存在时，launcher 本身不会打开浏览器，也不要求
+`DISPLAY`/`WAYLAND_DISPLAY`。Cookie 过期时，先停止 tunnel，在日常 Firefox 中重新完成
+KML SSO/MFA，然后重新运行 launcher；该方式不会自动弹窗刷新。
+
+tunnel client 出现以下日志表示认证信息已进入内存，且本地 `8080` 已就绪：
+
+```text
+loaded ... target-scoped cookie(s) from the environment
+client listening on ('127.0.0.1', 8080), forwarding to wss://kml-dtmachine-.../ws
+```
+
+如果无法从已有 profile 读取有效 Cookie，可在图形桌面终端使用以下备用交互
+模式。它会打开隔离的临时 Firefox，仍需要用户正常完成 SSO/MFA：
+
+```bash
+python tools/ws_tcp_tunnel.py client \
+  --listen-host=127.0.0.1 \
+  --listen-port=8080 \
+  --ws-url=wss://kml-dtmachine-27353-prod-0.kmlhb2az1l3-2.corp.kuaishou.com/ws \
+  --auth=kml-firefox \
+  --geckodriver=/snap/bin/geckodriver \
+  --auth-timeout=600
+```
+
+随后启动第 5 节的 RobotClient。远端 tunnel server 打印
+`websocket connected ... path=/ws` 才表示 WebSocket Upgrade 已返回 `101 Switching Protocols`
+并真正穿过 KML gateway。这只改变通信链路的交互式认证方式；本阶段仍然是
+fixture observation 和 JSONL action sink 的 `dry_run=true`，不会连接 ROS/controller 或驱动
+Franka 真机。
 
 ## 5. 机器人侧：启动 stock RobotClient（仍为 dry-run）
 
@@ -176,7 +229,9 @@ python -m lerobot.async_inference.robot_client \
 
 这里的 `pretrained_name_or_path=server-owned` 只是满足 client 配置；server CLI 中的真实
 checkpoint 路径具有优先级。插件只接受 exact 10D state、两路 `480×640×3 uint8` 图像和
-absolute8 action；`dry_run=false` 会直接拒绝启动。
+absolute8 action。本文命令必须保持 `dry_run=true`；`dry_run=false` 现在只允许进入
+`ros2_interface_only=true` 的隔离接口，并且必须改用 `lerobot_robot_franka_ros.ros2_client`
+入口，详见 `ROS2_INTERFACE.md`。
 
 ## 6. 本机回归 KML 拓扑
 
@@ -198,6 +253,8 @@ ws://127.0.0.1:16782/ws
 - client：插件自动发现，并收到 action chunk；
 - JSONL：连续、finite、单位 quaternion 的 absolute8 action。
 
-当前 stock LeRobot 行为保持不变：相同 fixture observation 可能被 server 的
-`observations_similar()` 过滤，而 client 的 pending flag 要到 10 秒 timeout 后才重发。这是
-后续真机阶段需要重新评审的 observation/queue 时序问题；本阶段没有修改 LeRobot core。
+相同 fixture observation 仍可能被 server 的 `observations_similar()` 正常过滤；若
+`SendObservations` 已成功但没有产生 action，client 会在 pending timeout 后采集一帧新的
+observation。若推理已完成但 action response 在断线窗口丢失，server 会缓存并重发同一个
+chunk，直到 client 本地提交后 ACK。完整状态机和故障恢复边界见
+[`ACTION_DELIVERY_ACK_PROTOCOL.md`](./ACTION_DELIVERY_ACK_PROTOCOL.md)。
