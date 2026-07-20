@@ -679,6 +679,15 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return chunk[:, : self.actions_per_chunk, :]
 
+    def _prepare_observation(self, observation_t: TimedObservation) -> Observation:
+        """Convert a transport observation into the tensors consumed by the policy processor."""
+        return raw_observation_to_observation(
+            observation_t.get_observation(),
+            self.lerobot_features,
+            self.policy_image_features,
+            self.rename_map,
+        )
+
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         """Predict an action chunk based on an observation.
 
@@ -691,12 +700,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         """
         """1. Prepare observation"""
         start_prepare = time.perf_counter()
-        observation: Observation = raw_observation_to_observation(
-            observation_t.get_observation(),
-            self.lerobot_features,
-            self.policy_image_features,
-            self.rename_map,
-        )
+        observation = self._prepare_observation(observation_t)
         prepare_time = time.perf_counter() - start_prepare
 
         """2. Apply preprocessor"""

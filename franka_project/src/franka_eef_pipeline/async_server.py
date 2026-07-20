@@ -1,10 +1,11 @@
 """Franka-specific adapter for LeRobot's asynchronous policy server.
 
-The transport, request handling, observation preparation, policy processors,
-and action timing remain owned by :class:`lerobot.async_inference.PolicyServer`.
-This module only supplies the two project-specific boundaries that the stock
+The transport, request handling, policy-processor orchestration, and action
+timing remain owned by :class:`lerobot.async_inference.PolicyServer`.
+This module only supplies the project-specific boundaries that the stock
 server cannot infer:
 
+* reproduce the training-time, aspect-ratio-preserving PI0 camera resize;
 * restore the project's unprefixed, full-parameter PI0 checkpoint strictly;
 * decode the model's 7D anchor-relative Cartesian actions into absolute 8D
   ``[xyz, quaternion_xyzw, gripper]`` targets before they leave the server.
@@ -21,13 +22,14 @@ import numpy as np
 import torch
 
 from lerobot.async_inference.helpers import (
+    Observation,
     RemotePolicyConfig,
     TimedAction,
     TimedObservation,
     make_lerobot_observation,
 )
 from lerobot.async_inference.policy_server import PolicyServer
-from lerobot.policies.pi0.modeling_pi0 import PI0Policy
+from lerobot.policies.pi0.modeling_pi0 import PI0Policy, resize_with_pad_torch
 from lerobot.utils.constants import OBS_STATE
 
 from .geometry import (
@@ -321,7 +323,7 @@ def _decode_absolute_action_chunk(anchor_state: np.ndarray, relative_chunk: torc
 
 
 class FrankaPI0PolicyServer(PolicyServer):
-    """LeRobot async server with strict Franka PI0 load/output adapters."""
+    """LeRobot async server with strict Franka PI0 preprocessing, load, and output adapters."""
 
     prefix = "franka_pi0_policy_server"
 
@@ -422,6 +424,79 @@ class FrankaPI0PolicyServer(PolicyServer):
         if not np.all(np.isfinite(state)):
             raise FrankaAsyncPolicyContractError("Raw Franka observation state contains NaN or Inf")
         return state
+
+    def _prepare_observation(self, observation_t: TimedObservation) -> Observation:
+        """Reproduce the PI0 training image path without distorting camera geometry.
+
+        Training converts the original 480x640 images to float32 in [0, 1] and
+        then lets PI0 resize them with aspect-ratio-preserving black padding.
+        The stock async helper instead stretches every camera directly to the
+        policy resolution, so this adapter performs PI0's exact resize here.
+        """
+        if self.lerobot_features is None:
+            raise FrankaAsyncPolicyContractError("LeRobot observation features are unset")
+
+        raw_observation = observation_t.get_observation()
+        try:
+            lerobot_observation = make_lerobot_observation(
+                raw_observation,
+                self.lerobot_features,
+            )
+            state = np.asarray(lerobot_observation[OBS_STATE], dtype=np.float32)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FrankaAsyncPolicyContractError(
+                "Could not reconstruct the Franka policy observation"
+            ) from exc
+
+        if state.shape != (STATE_DIM,):
+            raise FrankaAsyncPolicyContractError(
+                f"Raw Franka observation must reconstruct a ({STATE_DIM},) state, got {state.shape}"
+            )
+        if not np.all(np.isfinite(state)):
+            raise FrankaAsyncPolicyContractError("Raw Franka observation state contains NaN or Inf")
+
+        prepared: Observation = {
+            OBS_STATE: torch.from_numpy(np.array(state, copy=True)).unsqueeze(0),
+        }
+        for camera_key, policy_key in FRANKA_RENAME_MAP.items():
+            try:
+                image = np.asarray(lerobot_observation[camera_key])
+                target_shape = tuple(self.policy_image_features[policy_key].shape)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                raise FrankaAsyncPolicyContractError(
+                    f"Could not prepare Franka camera {camera_key!r} for PI0 feature {policy_key!r}"
+                ) from exc
+
+            if image.shape != FRANKA_CAMERA_SHAPE:
+                raise FrankaAsyncPolicyContractError(
+                    f"Raw Franka camera {camera_key!r} must have shape {FRANKA_CAMERA_SHAPE}, "
+                    f"got {image.shape}"
+                )
+            if image.dtype != np.uint8:
+                raise FrankaAsyncPolicyContractError(
+                    f"Raw Franka camera {camera_key!r} must have dtype uint8, got {image.dtype}"
+                )
+            if len(target_shape) != 3 or target_shape[0] != 3:
+                raise FrankaAsyncPolicyContractError(
+                    f"PI0 image feature {policy_key!r} must be CHW with three channels, got {target_shape}"
+                )
+
+            image_tensor = (
+                torch.from_numpy(np.array(image, copy=True))
+                .permute(2, 0, 1)
+                .to(dtype=torch.float32)
+                .div_(255.0)
+                .unsqueeze(0)
+            )
+            prepared[policy_key] = resize_with_pad_torch(
+                image_tensor,
+                target_shape[1],
+                target_shape[2],
+            ).contiguous()
+
+        if "task" in raw_observation:
+            prepared["task"] = raw_observation["task"]
+        return prepared
 
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         timed_actions = super()._predict_action_chunk(observation_t)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -20,6 +21,8 @@ from franka_eef_pipeline.pi0_training import PI0_CORE_WEIGHTS_NAMESPACE
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import RemotePolicyConfig, TimedAction, TimedObservation
 from lerobot.async_inference.policy_server import PolicyServer
+from lerobot.configs import FeatureType, PolicyFeature
+from lerobot.policies.pi0.modeling_pi0 import resize_with_pad_torch
 from lerobot.utils.constants import OBS_STATE
 
 
@@ -181,6 +184,57 @@ def test_policy_setup_accepts_exact_franka_client_contract():
     resolved = server._resolve_policy_specs(_client_specs(_client_features()))
     assert resolved.lerobot_features == _client_features()
     assert resolved.rename_map == FRANKA_RENAME_MAP
+
+
+def test_prepare_observation_matches_pi0_training_letterbox():
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "async" / "franka_observation_v1.npz"
+    with np.load(fixture_path) as fixture:
+        state = fixture["state"].copy()
+        cameras = {camera_key: fixture[camera_key].copy() for camera_key in ("camera1", "camera2")}
+
+    raw_observation = dict(zip(STATE_NAMES, state.tolist(), strict=True))
+    raw_observation.update(cameras)
+    raw_observation["task"] = "stack the cups"
+
+    server = _make_server()
+    server.lerobot_features = _client_features()
+    image_features = {
+        policy_key: PolicyFeature(type=FeatureType.VISUAL, shape=(3, 224, 224))
+        for policy_key in FRANKA_RENAME_MAP.values()
+    }
+    server.policy = SimpleNamespace(config=SimpleNamespace(image_features=image_features))
+
+    prepared = server._prepare_observation(
+        TimedObservation(timestamp=0.0, timestep=0, observation=raw_observation)
+    )
+
+    assert prepared["task"] == "stack the cups"
+    assert prepared[OBS_STATE].dtype is torch.float32
+    assert tuple(prepared[OBS_STATE].shape) == (1, 10)
+    torch.testing.assert_close(prepared[OBS_STATE].squeeze(0), torch.from_numpy(state))
+
+    for camera_key, policy_key in FRANKA_RENAME_MAP.items():
+        training_input = (
+            torch.from_numpy(cameras[camera_key.removeprefix("observation.images.")])
+            .permute(2, 0, 1)
+            .to(dtype=torch.float32)
+            .div(255.0)
+            .unsqueeze(0)
+        )
+        # PI0's model path temporarily converts BCHW to BHWC before calling
+        # resize_with_pad_torch, then restores BCHW for SigLIP.
+        expected = resize_with_pad_torch(
+            training_input.permute(0, 2, 3, 1),
+            224,
+            224,
+        ).permute(0, 3, 1, 2)
+        actual = prepared[policy_key]
+
+        assert tuple(actual.shape) == (1, 3, 224, 224)
+        torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        assert torch.count_nonzero(actual[:, :, :28, :]) == 0
+        assert torch.count_nonzero(actual[:, :, -28:, :]) == 0
+        assert torch.count_nonzero(actual[:, :, 28:-28, :]) > 0
 
 
 @pytest.mark.parametrize("field", ["state_order", "camera_shape", "extra_feature", "rename_map"])
