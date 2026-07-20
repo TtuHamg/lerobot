@@ -24,7 +24,8 @@ python -m lerobot.async_inference.policy_server \
      --actions_per_chunk=50 \
      --fps=30 \
      --inference_latency=0.033 \
-     --obs_queue_timeout=1
+     --obs_queue_timeout=1 \
+     --observation_similarity_mode=none
 ```
 """
 
@@ -556,7 +557,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             )
             return False
 
-        elif observations_similar(obs, previous_obs, lerobot_features=self.lerobot_features):
+        elif self.config.observation_similarity_mode == "state" and observations_similar(
+            obs, previous_obs, lerobot_features=self.lerobot_features
+        ):
             self.logger.debug(
                 f"Skipping observation #{obs.get_timestep()} - Observation too similar to last obs predicted!"
             )

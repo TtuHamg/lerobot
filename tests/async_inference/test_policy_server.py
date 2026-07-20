@@ -198,7 +198,9 @@ def test_server_policy_config_falls_back_to_client():
 
 def test_maybe_enqueue_observation_must_go(policy_server):
     """An observation with `must_go=True` is always enqueued."""
-    obs = _make_obs(torch.zeros(6), must_go=True)
+    policy_server.config.observation_similarity_mode = "state"
+    policy_server.last_processed_obs = _make_obs(torch.zeros(6))
+    obs = _make_obs(torch.zeros(6), timestep=1, must_go=True)
     assert policy_server._enqueue_observation(obs) is True
     assert policy_server.observation_queue.qsize() == 1
     assert policy_server.observation_queue.get_nowait() is obs
@@ -206,24 +208,71 @@ def test_maybe_enqueue_observation_must_go(policy_server):
 
 def test_maybe_enqueue_observation_dissimilar(policy_server):
     """A dissimilar observation (not `must_go`) is enqueued."""
+    policy_server.config.observation_similarity_mode = "state"
     # Set a last predicted observation.
     policy_server.last_processed_obs = _make_obs(torch.zeros(6))
     # Create a new, dissimilar observation.
-    new_obs = _make_obs(torch.ones(6) * 5)  # High norm difference
+    new_obs = _make_obs(torch.ones(6) * 5, timestep=1)  # High norm difference
 
     assert policy_server._enqueue_observation(new_obs) is True
     assert policy_server.observation_queue.qsize() == 1
 
 
-def test_maybe_enqueue_observation_is_skipped(policy_server):
-    """A similar observation (not `must_go`) is skipped."""
+def test_maybe_enqueue_similar_observation_by_default(monkeypatch, policy_server):
+    """State similarity filtering is disabled by default."""
+    monkeypatch.setattr(
+        "lerobot.async_inference.policy_server.observations_similar",
+        lambda *_args, **_kwargs: pytest.fail("state similarity should be disabled"),
+    )
+    policy_server.last_processed_obs = _make_obs(torch.zeros(6))
+    new_obs = _make_obs(torch.zeros(6) + 1e-4, timestep=1)
+
+    assert policy_server._enqueue_observation(new_obs) is True
+    assert policy_server.observation_queue.get_nowait() is new_obs
+
+
+def test_maybe_enqueue_similar_observation_is_skipped_in_state_mode(policy_server):
+    """State mode skips a similar observation that is not marked `must_go`."""
+    policy_server.config.observation_similarity_mode = "state"
     # Set a last predicted observation.
     policy_server.last_processed_obs = _make_obs(torch.zeros(6))
     # Create a new, very similar observation.
-    new_obs = _make_obs(torch.zeros(6) + 1e-4)
+    new_obs = _make_obs(torch.zeros(6) + 1e-4, timestep=1)
 
     assert policy_server._enqueue_observation(new_obs) is False
     assert policy_server.observation_queue.empty() is True
+
+
+def test_policy_server_config_rejects_unknown_observation_similarity_mode():
+    from lerobot.async_inference.configs import PolicyServerConfig
+
+    with pytest.raises(ValueError, match="observation_similarity_mode must be one of"):
+        PolicyServerConfig(observation_similarity_mode="state_and_image")
+
+
+def test_policy_server_config_defaults_to_no_observation_similarity_filter():
+    from lerobot.async_inference.configs import PolicyServerConfig
+
+    config = PolicyServerConfig()
+
+    assert config.observation_similarity_mode == "none"
+    assert config.to_dict()["observation_similarity_mode"] == "none"
+    state_config = PolicyServerConfig.from_dict({"observation_similarity_mode": "state"})
+    assert state_config.observation_similarity_mode == "state"
+
+
+@pytest.mark.parametrize("mode", ["none", "state"])
+def test_policy_server_config_parses_observation_similarity_mode_from_cli(mode):
+    import draccus
+
+    from lerobot.async_inference.configs import PolicyServerConfig
+
+    config = draccus.parse(
+        config_class=PolicyServerConfig,
+        args=[f"--observation_similarity_mode={mode}"],
+    )
+
+    assert config.observation_similarity_mode == mode
 
 
 def test_obs_sanity_checks(policy_server):
@@ -237,10 +286,16 @@ def test_obs_sanity_checks(policy_server):
 
     # Case 2 – observation too similar
     policy_server._predicted_timesteps.clear()
+    policy_server.config.observation_similarity_mode = "state"
     obs_similar = _make_obs(torch.zeros(6) + 1e-4, timestep=2)
     assert policy_server._obs_sanity_checks(obs_similar, prev) is False
 
-    # Case 3 – genuinely new & dissimilar observation passes
+    # Case 3 – similarity checks are bypassed in the default mode
+    policy_server.config.observation_similarity_mode = "none"
+    assert policy_server._obs_sanity_checks(obs_similar, prev) is True
+
+    # Case 4 – genuinely new & dissimilar observation passes in state mode
+    policy_server.config.observation_similarity_mode = "state"
     obs_ok = _make_obs(torch.ones(6) * 5, timestep=3)
     assert policy_server._obs_sanity_checks(obs_ok, prev) is True
 

@@ -63,6 +63,13 @@ class PolicyServerConfig:
     obs_queue_timeout: float = field(
         default=DEFAULT_OBS_QUEUE_TIMEOUT, metadata={"help": "Timeout for observation queue in seconds"}
     )
+    observation_similarity_mode: str = field(
+        default="none",
+        metadata={
+            "help": "Observation similarity filtering mode. 'none' disables filtering; "
+            "'state' skips observations whose state is similar to the last processed observation."
+        },
+    )
 
     # Policy configuration. When set, these values take precedence over policy
     # settings sent by the robot client.
@@ -88,6 +95,12 @@ class PolicyServerConfig:
 
         if self.obs_queue_timeout < 0:
             raise ValueError(f"obs_queue_timeout must be non-negative, got {self.obs_queue_timeout}")
+
+        if self.observation_similarity_mode not in ("none", "state"):
+            raise ValueError(
+                "observation_similarity_mode must be one of ('none', 'state'), "
+                f"got {self.observation_similarity_mode!r}"
+            )
 
         if self.actions_per_chunk is not None and self.actions_per_chunk <= 0:
             raise ValueError(f"actions_per_chunk must be positive, got {self.actions_per_chunk}")
@@ -119,6 +132,7 @@ class PolicyServerConfig:
             "fps": self.fps,
             "environment_dt": self.environment_dt,
             "inference_latency": self.inference_latency,
+            "observation_similarity_mode": self.observation_similarity_mode,
             "policy_type": self.policy_type,
             "pretrained_name_or_path": self.pretrained_name_or_path,
             "actions_per_chunk": self.actions_per_chunk,

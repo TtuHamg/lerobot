@@ -116,6 +116,7 @@ CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
   --fps=15 \
   --inference_latency=0 \
   --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
   --policy_type=pi0 \
   --pretrained_name_or_path="$CHECKPOINT" \
   --actions_per_chunk=50 \
@@ -253,8 +254,8 @@ ws://127.0.0.1:16782/ws
 - client：插件自动发现，并收到 action chunk；
 - JSONL：连续、finite、单位 quaternion 的 absolute8 action。
 
-相同 fixture observation 仍可能被 server 的 `observations_similar()` 正常过滤；若
-`SendObservations` 已成功但没有产生 action，client 会在 pending timeout 后采集一帧新的
-observation。若推理已完成但 action response 在断线窗口丢失，server 会缓存并重发同一个
-chunk，直到 client 本地提交后 ACK。完整状态机和故障恢复边界见
+默认的 `--observation_similarity_mode=none` 不会根据 state 相似度过滤 observation；如需
+恢复原行为，可显式设置为 `state`。若 `SendObservations` 已成功但没有产生 action，client
+会在 pending timeout 后采集一帧新的 observation。若推理已完成但 action response 在断线
+窗口丢失，server 会缓存并重发同一个 chunk，直到 client 本地提交后 ACK。完整状态机和故障恢复边界见
 [`ACTION_DELIVERY_ACK_PROTOCOL.md`](./ACTION_DELIVERY_ACK_PROTOCOL.md)。
