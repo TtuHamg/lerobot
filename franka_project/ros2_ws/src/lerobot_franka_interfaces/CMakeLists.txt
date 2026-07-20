@@ -7,10 +7,14 @@ find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 
-rosidl_generate_interfaces(${PROJECT_NAME}
+set(interface_files
   "msg/CartesianActionChunk.msg"
   "msg/CartesianActionChunkAck.msg"
   "msg/SafetyGatewayStatus.msg"
+)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  ${interface_files}
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs
 )
 

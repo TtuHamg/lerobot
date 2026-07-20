@@ -1,7 +1,7 @@
 # One replaceable, absolute Cartesian plan produced by the remote policy.
 #
 # header.frame_id is the Cartesian reference frame (normally "base").
-# header.stamp is the local ROS time at which the plan becomes eligible.
+# header.stamp begins interpolation from the measured state to poses[0].
 std_msgs/Header header
 
 uint32 schema_version
@@ -12,7 +12,7 @@ uint64 plan_id
 int64 source_timestep
 
 # Observation and transport provenance. These are metadata; the controller
-# must schedule points from header.stamp + i * period, not from these stamps.
+# must schedule target i from header.stamp + (i + 1) * period, not these stamps.
 builtin_interfaces/Time client_observation_stamp
 builtin_interfaces/Time server_send_stamp
 
@@ -20,10 +20,10 @@ builtin_interfaces/Time server_send_stamp
 # received/replayed plan when local time is after valid_until. Once accepted,
 # this short TTL does not truncate the already validated waypoint horizon.
 #
-# Point i is due at header.stamp + i * period. Gateways must independently drop
-# stale points and enforce execution watchdogs; valid_until never authorizes a
-# late waypoint. It is normal for later points in a multi-second chunk to be
-# scheduled after this sub-second transport TTL.
+# Pose i is reached at header.stamp + (i + 1) * period. Gateways must
+# independently drop stale plans and enforce execution/settle watchdogs;
+# valid_until never authorizes a late plan. It is normal for later points in a
+# multi-second chunk to be scheduled after this sub-second transport TTL.
 builtin_interfaces/Time valid_until
 builtin_interfaces/Duration period
 

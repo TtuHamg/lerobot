@@ -1,6 +1,10 @@
 # Franka LeRobot ROS2 接口
 
 > 状态：ROS2 interface runtime 已实现，本轮未启动 ROS graph，未驱动 Franka。
+>
+> ROS 2、LeRobot Client、KML gateway、Franka safety gateway 以及
+> `DISABLED/SHADOW/HOLD/ARMED/FAULT` 的综合说明，请优先阅读
+> [`FRANKA_LEROBOT_ROS2_COMMUNICATION_GUIDE_CN.md`](./FRANKA_LEROBOT_ROS2_COMMUNICATION_GUIDE_CN.md)。
 
 本文档描述当前已实现的“非执行 ROS2 边界”：它从 ROS2 读取两路图像、
 EEF pose、Franka qpos 和 gripper joint state，并把 PolicyServer 返回的完整
