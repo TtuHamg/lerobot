@@ -5,26 +5,28 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import franka_eef_pipeline.async_server as async_server_module
 import numpy as np
 import pytest
 import torch
-
-import franka_eef_pipeline.async_server as async_server_module
 from franka_eef_pipeline.async_server import (
-    FRANKA_RENAME_MAP,
     FRANKA_CHECKPOINT_TYPE,
+    FRANKA_RENAME_MAP,
     FrankaAsyncPolicyContractError,
+    FrankaCheckpointContract,
     FrankaPI0PolicyServer,
+    inspect_franka_checkpoint_contract,
     validate_franka_checkpoint,
+    validate_franka_server_config,
 )
 from franka_eef_pipeline.pi0_training import PI0_CORE_WEIGHTS_NAMESPACE
+
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import RemotePolicyConfig, TimedAction, TimedObservation
 from lerobot.async_inference.policy_server import PolicyServer
 from lerobot.configs import FeatureType, PolicyFeature
 from lerobot.policies.pi0.modeling_pi0 import resize_with_pad_torch
 from lerobot.utils.constants import OBS_STATE
-
 
 STATE_NAMES = (
     "eef.x",
@@ -38,47 +40,82 @@ STATE_NAMES = (
     "eef.rot6d.col1.z",
     "gripper.closed_0_1",
 )
+ROLLOUT_MISSING = object()
+SOURCE_DATASET_HASH = "a" * 64
 
 
-def _write_checkpoint_envelope(root: Path) -> Path:
+def _write_checkpoint_envelope(
+    root: Path,
+    *,
+    profile: str = "action15",
+    task: str = "stack the cups",
+    fps: int = 15,
+    chunk_size: int = 50,
+    geometry_rollout: object = False,
+    stats_rollout: object = False,
+    stats_profile: str | None = None,
+    stats_fps: int | None = None,
+) -> Path:
+    dataset_profile = {
+        "schema_version": 1,
+        "profile": profile,
+        "task_instruction": task,
+        "observation_fps": fps,
+        "action_fps": fps,
+        "chunk_size": chunk_size,
+        "requires_project_cartesian_adapter": True,
+        "requires_project_dual_rate_adapter": False,
+        "partial_conversion": False,
+        "source_dataset_hash": SOURCE_DATASET_HASH,
+    }
+    if geometry_rollout is not ROLLOUT_MISSING:
+        dataset_profile["real_robot_rollout_authorized"] = geometry_rollout
+
     geometry_manifest = {
         "schema_version": 1,
         "state10": "current measured EEF xyz + rotation6d(first two columns) + gripper_0_1",
-        "task_instruction": "stack the cups",
+        "task_instruction": task,
         "action7": {
-            "chunk_size": 50,
-            "frequency_hz": 15,
+            "chunk_size": chunk_size,
+            "frequency_hz": fps,
             "gripper": "future measured target gripper_0_1",
             "rotation": "body rotvec Log(R_current.T @ R_target)",
             "translation": "base-frame target_xyz - current_xyz",
         },
-        "dataset_profile": {
-            "schema_version": 1,
-            "profile": "action15",
-            "observation_fps": 15,
-            "action_fps": 15,
-            "chunk_size": 50,
-            "requires_project_cartesian_adapter": True,
-            "requires_project_dual_rate_adapter": False,
-            "real_robot_rollout_authorized": False,
-        },
+        "dataset_profile": dataset_profile,
     }
     stats_manifest = {
         "schema_version": 1,
-        "profile": "action15",
-        "observation_fps": 15,
-        "action_fps": 15,
-        "chunk_size": 50,
-        "real_robot_rollout_authorized": False,
-        OBS_STATE: {
-            name: [0.0] * 10 for name in ("min", "max", "mean", "std", "q01", "q99")
+        "profile": profile if stats_profile is None else stats_profile,
+        "observation_fps": fps if stats_fps is None else stats_fps,
+        "action_fps": fps if stats_fps is None else stats_fps,
+        "chunk_size": chunk_size,
+        "source_dataset_hash": SOURCE_DATASET_HASH,
+        OBS_STATE: {name: [0.0] * 10 for name in ("min", "max", "mean", "std", "q01", "q99")},
+        "action": {name: [0.0] * 7 for name in ("min", "max", "mean", "std", "q01", "q99")},
+    }
+    if stats_rollout is not ROLLOUT_MISSING:
+        stats_manifest["real_robot_rollout_authorized"] = stats_rollout
+
+    model_config = {
+        "type": "pi0",
+        "input_features": {
+            OBS_STATE: {"type": "STATE", "shape": [10]},
         },
-        "action": {
-            name: [0.0] * 7 for name in ("min", "max", "mean", "std", "q01", "q99")
+        "output_features": {
+            "action": {"type": "ACTION", "shape": [7]},
+        },
+        "chunk_size": chunk_size,
+        "n_action_steps": chunk_size,
+        "use_relative_actions": False,
+        "normalization_mapping": {
+            "VISUAL": "IDENTITY",
+            "STATE": "MEAN_STD",
+            "ACTION": "MEAN_STD",
         },
     }
     tracked = {
-        "config.json": b"{}\n",
+        "config.json": f"{json.dumps(model_config)}\n".encode(),
         "model.safetensors": b"fake-model",
         "policy_preprocessor.json": json.dumps(
             {
@@ -237,6 +274,24 @@ def test_prepare_observation_matches_pi0_training_letterbox():
         assert torch.count_nonzero(actual[:, :, 28:-28, :]) > 0
 
 
+@pytest.mark.parametrize("task", ["stack the cups", "", None])
+def test_prepare_observation_rejects_task_that_does_not_match_checkpoint(task: object):
+    server = _make_server()
+    server._checkpoint_contract = FrankaCheckpointContract(
+        profile="native30",
+        task_instruction="pick up the potato chip",
+        observation_fps=30,
+        action_fps=30,
+        chunk_size=50,
+        real_robot_rollout_authorized=False,
+        rollout_authorization_declared=False,
+    )
+    observation = {"task": task} if task is not None else {}
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match="task does not match"):
+        server._prepare_observation(TimedObservation(timestamp=0.0, timestep=0, observation=observation))
+
+
 @pytest.mark.parametrize("field", ["state_order", "camera_shape", "extra_feature", "rename_map"])
 def test_policy_setup_rejects_client_contract_drift(field: str):
     features = _client_features()
@@ -255,9 +310,164 @@ def test_policy_setup_rejects_client_contract_drift(field: str):
         server._resolve_policy_specs(_client_specs(features, rename_map=rename_map))
 
 
-def test_checkpoint_preflight_accepts_complete_franka_envelope(tmp_path: Path):
-    checkpoint = _write_checkpoint_envelope(tmp_path)
-    assert validate_franka_checkpoint(checkpoint) == checkpoint.resolve()
+@pytest.mark.parametrize(
+    ("profile", "task", "fps", "chunk_size", "rollout_value", "rollout_declared"),
+    [
+        ("action15", "stack the cups", 15, 50, False, True),
+        ("native30", "pick up the potato chip", 30, 50, ROLLOUT_MISSING, False),
+        ("future24", "future checkpoint task", 24, 17, False, True),
+    ],
+)
+def test_checkpoint_preflight_uses_checkpoint_contract(
+    tmp_path: Path,
+    profile: str,
+    task: str,
+    fps: int,
+    chunk_size: int,
+    rollout_value: object,
+    rollout_declared: bool,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        profile=profile,
+        task=task,
+        fps=fps,
+        chunk_size=chunk_size,
+        geometry_rollout=rollout_value,
+        stats_rollout=rollout_value,
+    )
+
+    contract = inspect_franka_checkpoint_contract(
+        checkpoint,
+        expected_fps=fps,
+        expected_actions_per_chunk=chunk_size,
+    )
+    assert contract == FrankaCheckpointContract(
+        profile=profile,
+        task_instruction=task,
+        observation_fps=fps,
+        action_fps=fps,
+        chunk_size=chunk_size,
+        real_robot_rollout_authorized=False,
+        rollout_authorization_declared=rollout_declared,
+    )
+    assert (
+        validate_franka_checkpoint(
+            checkpoint,
+            expected_fps=fps,
+            expected_actions_per_chunk=chunk_size,
+        )
+        == checkpoint.resolve()
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected_fps", "expected_chunk", "message"),
+    [(15, 50, "fps mismatch"), (30, 49, "actions_per_chunk mismatch")],
+)
+def test_checkpoint_contract_rejects_cli_timing_mismatch(
+    tmp_path: Path,
+    expected_fps: int,
+    expected_chunk: int,
+    message: str,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        profile="native30",
+        task="pick up the potato chip",
+        fps=30,
+        geometry_rollout=ROLLOUT_MISSING,
+        stats_rollout=ROLLOUT_MISSING,
+    )
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match=message):
+        inspect_franka_checkpoint_contract(
+            checkpoint,
+            expected_fps=expected_fps,
+            expected_actions_per_chunk=expected_chunk,
+        )
+
+
+@pytest.mark.parametrize("rollout_value", [True, None, 1, "false"])
+def test_checkpoint_contract_rejects_rollout_self_authorization_or_malformed_value(
+    tmp_path: Path,
+    rollout_value: object,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        geometry_rollout=rollout_value,
+        stats_rollout=rollout_value,
+    )
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match="must be false"):
+        inspect_franka_checkpoint_contract(checkpoint)
+
+
+@pytest.mark.parametrize(
+    ("geometry_rollout", "stats_rollout"),
+    [(False, ROLLOUT_MISSING), (ROLLOUT_MISSING, False)],
+)
+def test_checkpoint_contract_rejects_inconsistent_rollout_declaration(
+    tmp_path: Path,
+    geometry_rollout: object,
+    stats_rollout: object,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        geometry_rollout=geometry_rollout,
+        stats_rollout=stats_rollout,
+    )
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match="declaration must match"):
+        inspect_franka_checkpoint_contract(checkpoint)
+
+
+@pytest.mark.parametrize(
+    ("stats_profile", "stats_fps"),
+    [("native30", None), (None, 30)],
+)
+def test_checkpoint_contract_rejects_geometry_stats_drift(
+    tmp_path: Path,
+    stats_profile: str | None,
+    stats_fps: int | None,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        stats_profile=stats_profile,
+        stats_fps=stats_fps,
+    )
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match="stats manifest contract mismatch"):
+        inspect_franka_checkpoint_contract(checkpoint)
+
+
+@pytest.mark.parametrize(("fps", "chunk_size"), [(15, 50), (30, 50), (24, 17)])
+def test_server_config_uses_selected_checkpoint_timing(
+    tmp_path: Path,
+    fps: int,
+    chunk_size: int,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        profile=f"profile{fps}",
+        task=f"task at {fps} hz",
+        fps=fps,
+        chunk_size=chunk_size,
+    )
+    config = PolicyServerConfig(
+        host="127.0.0.1",
+        port=45678,
+        fps=fps,
+        policy_type="pi0",
+        pretrained_name_or_path=str(checkpoint),
+        actions_per_chunk=chunk_size,
+        policy_device="cpu",
+    )
+
+    contract = validate_franka_server_config(config)
+
+    assert contract.observation_fps == fps
+    assert contract.chunk_size == chunk_size
 
 
 def test_checkpoint_preflight_rejects_non_franka_manifest(tmp_path: Path):
@@ -273,7 +483,11 @@ def test_checkpoint_preflight_rejects_non_franka_manifest(tmp_path: Path):
 
 def test_checkpoint_preflight_rejects_same_size_content_corruption(tmp_path: Path):
     checkpoint = _write_checkpoint_envelope(tmp_path)
-    (checkpoint / "config.json").write_bytes(b"[]\n")
+    config_path = checkpoint / "config.json"
+    corrupted = bytearray(config_path.read_bytes())
+    pi0_offset = corrupted.index(b'"pi0"') + 1
+    corrupted[pi0_offset] = ord("x")
+    config_path.write_bytes(corrupted)
 
     with pytest.raises(FrankaAsyncPolicyContractError, match="SHA-256 mismatch"):
         validate_franka_checkpoint(checkpoint)
@@ -308,15 +522,15 @@ def test_strict_load_uses_project_loader_and_sets_eval(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         async_server_module,
         "load_pi0_full_checkpoint_weights",
-        lambda policy, path: calls.append(("weights", (policy, path)))
-        or {"project_manifest_present": True},
+        lambda policy, path: calls.append(("weights", (policy, path))) or {"project_manifest_present": True},
     )
 
-    server = _make_server()
+    server = _make_server(actions_per_chunk=50)
     server.device = "cpu"
     policy = server._load_policy("pi0", str(checkpoint))
 
     assert policy.training is False
+    assert server._checkpoint_contract.task_instruction == "stack the cups"
     assert [name for name, _ in calls] == ["config", "construct", "canonicalize", "weights", "eval"]
 
 
@@ -325,6 +539,26 @@ def test_strict_load_rejects_other_policy_type(tmp_path: Path):
     server.device = "cpu"
     with pytest.raises(FrankaAsyncPolicyContractError, match="only accepts"):
         server._load_policy("act", str(tmp_path))
+
+
+def test_failed_reload_keeps_previous_checkpoint_contract(tmp_path: Path):
+    previous_contract = FrankaCheckpointContract(
+        profile="action15",
+        task_instruction="stack the cups",
+        observation_fps=15,
+        action_fps=15,
+        chunk_size=50,
+        real_robot_rollout_authorized=False,
+        rollout_authorization_declared=True,
+    )
+    server = _make_server(actions_per_chunk=50)
+    server.device = "cpu"
+    server._checkpoint_contract = previous_contract
+
+    with pytest.raises(FrankaAsyncPolicyContractError, match="local directory"):
+        server._load_policy("pi0", str(tmp_path / "missing"))
+
+    assert server._checkpoint_contract is previous_contract
 
 
 def test_predict_decodes_relative_chunk_against_raw_anchor(monkeypatch: pytest.MonkeyPatch):

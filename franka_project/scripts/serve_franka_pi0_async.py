@@ -11,47 +11,34 @@ from pprint import pformat
 import draccus
 import grpc
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_SRC = PROJECT_ROOT / "src"
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from franka_eef_pipeline.async_server import FrankaPI0PolicyServer  # noqa: E402
+from franka_eef_pipeline.async_server import (  # noqa: E402
+    FrankaCheckpointContract,
+    FrankaPI0PolicyServer,
+    validate_franka_server_config,
+)
+
 from lerobot.async_inference.configs import PolicyServerConfig  # noqa: E402
 from lerobot.transport import services_pb2_grpc  # noqa: E402
 
 
-def validate_phase1_config(cfg: PolicyServerConfig) -> None:
-    """Fail fast on settings that would violate the approved dry-run contract."""
+def validate_phase1_config(cfg: PolicyServerConfig) -> FrankaCheckpointContract:
+    """Fail fast when CLI inputs disagree with the selected checkpoint contract."""
 
-    expected = {
-        "host": "127.0.0.1",
-        "port": 15173,
-        "fps": 15,
-        "policy_type": "pi0",
-        "actions_per_chunk": 50,
-    }
-    actual = {name: getattr(cfg, name) for name in expected}
-    mismatches = {
-        name: {"expected": value, "actual": actual[name]}
-        for name, value in expected.items()
-        if actual[name] != value
-    }
-    if mismatches:
-        raise ValueError(f"Phase 1 Franka async server configuration mismatch: {mismatches}")
-    if cfg.pretrained_name_or_path is None:
-        raise ValueError("Phase 1 Franka async server requires --pretrained_name_or_path")
-    if cfg.policy_device is None or not cfg.policy_device.startswith("cuda"):
-        raise ValueError("Phase 1 Franka async server requires an explicit CUDA --policy_device")
+    return validate_franka_server_config(cfg)
 
 
 @draccus.wrap()
 def serve(cfg: PolicyServerConfig) -> None:
     """Start the stock LeRobot gRPC service with the Franka adapter."""
 
-    validate_phase1_config(cfg)
-    logging.info(pformat(asdict(cfg)))
+    contract = validate_phase1_config(cfg)
+    logging.info("Server configuration:\n%s", pformat(asdict(cfg)))
+    logging.info("Checkpoint serving contract:\n%s", pformat(asdict(contract)))
     policy_server = FrankaPI0PolicyServer(cfg)
     grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     services_pb2_grpc.add_AsyncInferenceServicer_to_server(policy_server, grpc_server)

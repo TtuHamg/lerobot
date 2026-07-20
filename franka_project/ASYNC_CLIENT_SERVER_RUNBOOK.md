@@ -123,8 +123,10 @@ CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
   --policy_device=cuda
 ```
 
-Launcher 会 fail-fast 检查 loopback 地址、端口、15 Hz、50-step chunk、PI0 checkpoint
-manifest/hash/geometry/stats 和 CUDA device。第一次 client 握手时才真正加载模型。
+Launcher 会从所选 checkpoint 的 `config.json`、geometry manifest 和 stats manifest 推导
+task、profile、FPS 与 chunk size，并 fail-fast 检查它们和 CLI 输入一致；不再写死 15 Hz 或
+50-step chunk。上面是杯子 checkpoint 的 15 Hz 示例；薯片 native30 checkpoint 应把 server
+和 client 的 `--fps` 都改为 `30`。完整文件 hash 校验和模型加载在第一次 client 握手时执行。
 
 ## 3. KML：启动 16782 tunnel server
 

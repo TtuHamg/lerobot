@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
+from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import (
     Observation,
     RemotePolicyConfig,
@@ -46,7 +48,6 @@ from .pi0_training import (
     canonicalize_pi0_full_training_graph,
     load_pi0_full_checkpoint_weights,
 )
-
 
 FRANKA_CHECKPOINT_TYPE = "franka_pi0_full_parameter_eef"
 ABSOLUTE_ACTION_DIM = 8
@@ -82,9 +83,30 @@ _MANIFEST_TRACKED_FILES = (
     "pi0_eef_stats.json",
 )
 
+_STATE_DESCRIPTION = "current measured EEF xyz + rotation6d(first two columns) + gripper_0_1"
+_ACTION_SEMANTICS = {
+    "gripper": "future measured target gripper_0_1",
+    "rotation": "body rotvec Log(R_current.T @ R_target)",
+    "translation": "base-frame target_xyz - current_xyz",
+}
+_MISSING = object()
+
 
 class FrankaAsyncPolicyContractError(RuntimeError):
     """Raised when remote inference would violate the frozen Franka contract."""
+
+
+@dataclass(frozen=True)
+class FrankaCheckpointContract:
+    """Checkpoint-owned serving values after cross-file contract validation."""
+
+    profile: str
+    task_instruction: str
+    observation_fps: int
+    action_fps: int
+    chunk_size: int
+    real_robot_rollout_authorized: bool
+    rollout_authorization_declared: bool
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -130,94 +152,311 @@ def _validate_processor_state_files(checkpoint_dir: Path, config_name: str) -> N
             raise FrankaAsyncPolicyContractError(f"Processor state file is empty: {state_path}")
 
 
-def _validate_geometry_and_stats_manifests(checkpoint_dir: Path) -> None:
+def _positive_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise FrankaAsyncPolicyContractError(f"{name} must be a positive integer, got {value!r}")
+    return value
+
+
+def _nonempty_string(value: Any, *, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise FrankaAsyncPolicyContractError(f"{name} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _sha256_string(value: Any, *, name: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise FrankaAsyncPolicyContractError(f"{name} must be a 64-character SHA-256 hex string")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise FrankaAsyncPolicyContractError(f"{name} must be a 64-character SHA-256 hex string") from exc
+    return value
+
+
+def _rollout_authorization(mapping: dict[str, Any], *, name: str) -> tuple[bool, bool]:
+    """Parse checkpoint provenance without allowing it to authorize actuation.
+
+    Legacy native30 checkpoints omit this field. Missing means unapproved, just
+    like an explicit ``false``; malformed values and self-authorization are
+    rejected.
+    """
+
+    value = mapping.get("real_robot_rollout_authorized", _MISSING)
+    if value is _MISSING:
+        return False, False
+    if value is not False:
+        raise FrankaAsyncPolicyContractError(
+            f"{name}.real_robot_rollout_authorized must be false when present, got {value!r}"
+        )
+    return False, True
+
+
+def _validate_model_config(model_config: dict[str, Any], *, chunk_size: int) -> None:
+    if model_config.get("type") != "pi0":
+        raise FrankaAsyncPolicyContractError(
+            f"Franka model config type must be 'pi0', got {model_config.get('type')!r}"
+        )
+
+    features = (
+        ("input_features", OBS_STATE, "STATE", STATE_DIM),
+        ("output_features", "action", "ACTION", ACTION_DIM),
+    )
+    for container_name, feature_name, expected_type, expected_dimension in features:
+        container = model_config.get(container_name)
+        feature = container.get(feature_name) if isinstance(container, dict) else None
+        shape_value = feature.get("shape") if isinstance(feature, dict) else None
+        shape = tuple(shape_value) if isinstance(shape_value, (list, tuple)) else None
+        actual = {
+            "type": feature.get("type") if isinstance(feature, dict) else None,
+            "shape": shape,
+        }
+        expected = {"type": expected_type, "shape": (expected_dimension,)}
+        if actual != expected:
+            raise FrankaAsyncPolicyContractError(
+                f"Franka model config {feature_name!r} mismatch: expected={expected}, actual={actual}"
+            )
+
+    for field_name in ("chunk_size", "n_action_steps"):
+        actual_chunk_size = _positive_int(model_config.get(field_name), name=f"config.{field_name}")
+        if actual_chunk_size != chunk_size:
+            raise FrankaAsyncPolicyContractError(
+                f"Franka model config {field_name} mismatch: expected={chunk_size}, "
+                f"actual={actual_chunk_size}"
+            )
+
+    if model_config.get("use_relative_actions") is not False:
+        raise FrankaAsyncPolicyContractError(
+            "Franka model config use_relative_actions must be false because the project adapter "
+            "owns relative7-to-absolute8 decoding"
+        )
+
+    normalization = model_config.get("normalization_mapping")
+    expected_normalization = {"VISUAL": "IDENTITY", "STATE": "MEAN_STD", "ACTION": "MEAN_STD"}
+    actual_normalization = (
+        {name: normalization.get(name) for name in expected_normalization}
+        if isinstance(normalization, dict)
+        else None
+    )
+    if actual_normalization != expected_normalization:
+        raise FrankaAsyncPolicyContractError(
+            "Franka model normalization mismatch: "
+            f"expected={expected_normalization}, actual={actual_normalization}"
+        )
+
+
+def _validate_geometry_and_stats_manifests(
+    checkpoint_dir: Path,
+    *,
+    expected_fps: int | None = None,
+    expected_actions_per_chunk: int | None = None,
+) -> FrankaCheckpointContract:
     geometry_path = checkpoint_dir / "franka_eef_geometry_manifest.json"
     geometry = _read_json_object(geometry_path)
-    expected_geometry = {
-        "schema_version": 1,
-        "state10": "current measured EEF xyz + rotation6d(first two columns) + gripper_0_1",
-        "task_instruction": "stack the cups",
-    }
+    if geometry.get("schema_version") != 1:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka geometry schema_version must be 1, got {geometry.get('schema_version')!r}"
+        )
+    if geometry.get("state10") != _STATE_DESCRIPTION:
+        raise FrankaAsyncPolicyContractError(
+            "Franka geometry state10 contract mismatch: "
+            f"expected={_STATE_DESCRIPTION!r}, actual={geometry.get('state10')!r}"
+        )
+    task_instruction = _nonempty_string(geometry.get("task_instruction"), name="geometry.task_instruction")
+
     action7 = geometry.get("action7")
     profile = geometry.get("dataset_profile")
-    expected_action7 = {
-        "chunk_size": 50,
-        "frequency_hz": 15,
-        "gripper": "future measured target gripper_0_1",
-        "rotation": "body rotvec Log(R_current.T @ R_target)",
-        "translation": "base-frame target_xyz - current_xyz",
-    }
-    expected_profile = {
-        "schema_version": 1,
-        "profile": "action15",
-        "observation_fps": 15,
-        "action_fps": 15,
-        "chunk_size": 50,
-        "requires_project_cartesian_adapter": True,
-        "requires_project_dual_rate_adapter": False,
-        "real_robot_rollout_authorized": False,
-    }
-    mismatches = {
-        key: {"expected": expected, "actual": geometry.get(key)}
-        for key, expected in expected_geometry.items()
-        if geometry.get(key) != expected
-    }
-    if action7 != expected_action7:
-        mismatches["action7"] = {"expected": expected_action7, "actual": action7}
+    if not isinstance(action7, dict):
+        raise FrankaAsyncPolicyContractError("Franka geometry manifest has no action7 object")
     if not isinstance(profile, dict):
-        mismatches["dataset_profile"] = {"expected": expected_profile, "actual": profile}
-    else:
-        actual_profile = {key: profile.get(key) for key in expected_profile}
-        if actual_profile != expected_profile:
-            mismatches["dataset_profile"] = {
-                "expected": expected_profile,
-                "actual": actual_profile,
-            }
-    if mismatches:
+        raise FrankaAsyncPolicyContractError("Franka geometry manifest has no dataset_profile object")
+
+    action_semantics = {name: action7.get(name) for name in _ACTION_SEMANTICS}
+    if action_semantics != _ACTION_SEMANTICS:
         raise FrankaAsyncPolicyContractError(
-            f"Franka geometry manifest contract mismatch: {mismatches}"
+            "Franka geometry action7 semantics mismatch: "
+            f"expected={_ACTION_SEMANTICS}, actual={action_semantics}"
         )
+
+    if profile.get("schema_version") != 1:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka dataset profile schema_version must be 1, got {profile.get('schema_version')!r}"
+        )
+    profile_name = _nonempty_string(profile.get("profile"), name="geometry.dataset_profile.profile")
+    observation_fps = _positive_int(
+        profile.get("observation_fps"), name="geometry.dataset_profile.observation_fps"
+    )
+    action_fps = _positive_int(profile.get("action_fps"), name="geometry.dataset_profile.action_fps")
+    chunk_size = _positive_int(profile.get("chunk_size"), name="geometry.dataset_profile.chunk_size")
+    action_frequency = _positive_int(action7.get("frequency_hz"), name="geometry.action7.frequency_hz")
+    action_chunk_size = _positive_int(action7.get("chunk_size"), name="geometry.action7.chunk_size")
+    if action_frequency != action_fps or action_chunk_size != chunk_size:
+        raise FrankaAsyncPolicyContractError(
+            "Franka geometry action7/profile timing mismatch: "
+            f"action7=(frequency_hz={action_frequency}, chunk_size={action_chunk_size}), "
+            f"profile=(action_fps={action_fps}, chunk_size={chunk_size})"
+        )
+    if observation_fps != action_fps:
+        raise FrankaAsyncPolicyContractError(
+            "Franka async server requires equal observation/action rates, got "
+            f"observation_fps={observation_fps}, action_fps={action_fps}"
+        )
+    if profile.get("requires_project_cartesian_adapter") is not True:
+        raise FrankaAsyncPolicyContractError(
+            "Franka dataset profile requires_project_cartesian_adapter must be true"
+        )
+    if profile.get("requires_project_dual_rate_adapter") is not False:
+        raise FrankaAsyncPolicyContractError(
+            "Franka dataset profile requires_project_dual_rate_adapter must be false"
+        )
+    if profile.get("partial_conversion", _MISSING) is not False:
+        raise FrankaAsyncPolicyContractError("Franka dataset profile partial_conversion must be false")
+    profile_task = profile.get("task_instruction")
+    if profile_task != task_instruction:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka geometry task mismatch: top_level={task_instruction!r}, dataset_profile={profile_task!r}"
+        )
+    _, geometry_rollout_declared = _rollout_authorization(profile, name="geometry.dataset_profile")
 
     stats_path = checkpoint_dir / "pi0_eef_stats.json"
     stats = _read_json_object(stats_path)
     expected_stats = {
         "schema_version": 1,
-        "profile": "action15",
-        "observation_fps": 15,
-        "action_fps": 15,
-        "chunk_size": 50,
-        "real_robot_rollout_authorized": False,
+        "profile": profile_name,
+        "observation_fps": observation_fps,
+        "action_fps": action_fps,
+        "chunk_size": chunk_size,
     }
     actual_stats = {key: stats.get(key) for key in expected_stats}
     if actual_stats != expected_stats:
         raise FrankaAsyncPolicyContractError(
-            "Franka stats manifest contract mismatch: "
-            f"expected={expected_stats}, actual={actual_stats}"
+            f"Franka stats manifest contract mismatch: expected={expected_stats}, actual={actual_stats}"
         )
+    _, stats_rollout_declared = _rollout_authorization(stats, name="stats")
+    if geometry_rollout_declared != stats_rollout_declared:
+        raise FrankaAsyncPolicyContractError(
+            "Franka rollout authorization declaration must match between geometry and stats"
+        )
+
+    geometry_dataset_hash = _sha256_string(
+        profile.get("source_dataset_hash"), name="geometry.dataset_profile.source_dataset_hash"
+    )
+    stats_dataset_hash = _sha256_string(stats.get("source_dataset_hash"), name="stats.source_dataset_hash")
+    if geometry_dataset_hash != stats_dataset_hash:
+        raise FrankaAsyncPolicyContractError(
+            "Franka source_dataset_hash mismatch between geometry and stats: "
+            f"geometry={geometry_dataset_hash!r}, stats={stats_dataset_hash!r}"
+        )
+
     for feature_name, dimension in ((OBS_STATE, STATE_DIM), ("action", ACTION_DIM)):
         feature_stats = stats.get(feature_name)
         if not isinstance(feature_stats, dict):
-            raise FrankaAsyncPolicyContractError(
-                f"Franka stats manifest has no {feature_name!r} statistics"
-            )
+            raise FrankaAsyncPolicyContractError(f"Franka stats manifest has no {feature_name!r} statistics")
         for statistic in ("min", "max", "mean", "std", "q01", "q99"):
-            values = np.asarray(feature_stats.get(statistic), dtype=np.float64)
+            try:
+                values = np.asarray(feature_stats.get(statistic), dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise FrankaAsyncPolicyContractError(
+                    f"Franka stats {feature_name}.{statistic} must be finite shape ({dimension},)"
+                ) from exc
             if values.shape != (dimension,) or not np.all(np.isfinite(values)):
                 raise FrankaAsyncPolicyContractError(
                     f"Franka stats {feature_name}.{statistic} must be finite shape ({dimension},)"
                 )
 
+        min_values = np.asarray(feature_stats["min"], dtype=np.float64)
+        max_values = np.asarray(feature_stats["max"], dtype=np.float64)
+        std_values = np.asarray(feature_stats["std"], dtype=np.float64)
+        if np.any(min_values > max_values):
+            raise FrankaAsyncPolicyContractError(f"Franka stats {feature_name} has min greater than max")
+        if np.any(std_values < 0):
+            raise FrankaAsyncPolicyContractError(f"Franka stats {feature_name}.std must be non-negative")
+        if min_values[-1] < 0.0 or max_values[-1] > 1.0:
+            raise FrankaAsyncPolicyContractError(
+                f"Franka stats {feature_name} gripper range must stay within [0, 1]"
+            )
 
-def validate_franka_checkpoint(pretrained_path: str | Path) -> Path:
+    model_config = _read_json_object(checkpoint_dir / "config.json")
+    _validate_model_config(model_config, chunk_size=chunk_size)
+
+    if expected_fps is not None and expected_fps != observation_fps:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka server/checkpoint fps mismatch: server={expected_fps}, checkpoint={observation_fps}"
+        )
+    if expected_actions_per_chunk is not None and expected_actions_per_chunk != chunk_size:
+        raise FrankaAsyncPolicyContractError(
+            "Franka server/checkpoint actions_per_chunk mismatch: "
+            f"server={expected_actions_per_chunk}, checkpoint={chunk_size}"
+        )
+
+    return FrankaCheckpointContract(
+        profile=profile_name,
+        task_instruction=task_instruction,
+        observation_fps=observation_fps,
+        action_fps=action_fps,
+        chunk_size=chunk_size,
+        real_robot_rollout_authorized=False,
+        rollout_authorization_declared=geometry_rollout_declared,
+    )
+
+
+def inspect_franka_checkpoint_contract(
+    pretrained_path: str | Path,
+    *,
+    expected_fps: int | None = None,
+    expected_actions_per_chunk: int | None = None,
+) -> FrankaCheckpointContract:
+    """Read and cross-check cheap checkpoint metadata without verifying file hashes."""
+
+    checkpoint_dir = Path(pretrained_path).expanduser().resolve()
+    if not checkpoint_dir.is_dir():
+        raise FrankaAsyncPolicyContractError(
+            f"Franka pretrained path must be a local directory: {checkpoint_dir}"
+        )
+    return _validate_geometry_and_stats_manifests(
+        checkpoint_dir,
+        expected_fps=expected_fps,
+        expected_actions_per_chunk=expected_actions_per_chunk,
+    )
+
+
+def validate_franka_server_config(config: PolicyServerConfig) -> FrankaCheckpointContract:
+    """Validate CLI inputs against the selected checkpoint's own serving contract."""
+
+    if config.host not in {"localhost", "127.0.0.1"}:
+        raise ValueError(
+            "Franka async server must bind to a loopback host because its transport is a trusted boundary"
+        )
+    if config.policy_type != "pi0":
+        raise ValueError(f"Franka async server requires --policy_type=pi0, got {config.policy_type!r}")
+    if config.pretrained_name_or_path is None:
+        raise ValueError("Franka async server requires --pretrained_name_or_path")
+    if config.actions_per_chunk is None:
+        raise ValueError("Franka async server requires --actions_per_chunk")
+    if config.policy_device is None:
+        raise ValueError("Franka async server requires --policy_device")
+
+    return inspect_franka_checkpoint_contract(
+        config.pretrained_name_or_path,
+        expected_fps=config.fps,
+        expected_actions_per_chunk=config.actions_per_chunk,
+    )
+
+
+def _validate_franka_checkpoint(
+    pretrained_path: str | Path,
+    *,
+    expected_fps: int | None = None,
+    expected_actions_per_chunk: int | None = None,
+) -> tuple[Path, FrankaCheckpointContract]:
     """Validate the project checkpoint envelope before allocating the PI0 model.
 
     The strict tensor namespace, graph, missing/unexpected keys, and a numerical
     tensor identity check are enforced later by
-    :func:`load_pi0_full_checkpoint_weights`. This inexpensive preflight rejects
-    non-Franka or incomplete checkpoint directories before the multi-billion
-    parameter model is constructed. It deliberately hashes the 6.9 GB weights,
-    so this integrity preflight is part of cold startup rather than a cheap
-    per-observation check.
+    :func:`load_pi0_full_checkpoint_weights`. This preflight rejects non-Franka
+    or incomplete checkpoint directories before the multi-billion parameter
+    model is constructed. Metadata/configuration mismatches are checked before
+    hashing the multi-gigabyte model file.
     """
 
     checkpoint_dir = Path(pretrained_path).expanduser().resolve()
@@ -244,14 +483,13 @@ def validate_franka_checkpoint(pretrained_path: str | Path) -> Path:
         if manifest.get(key) != expected
     }
     if mismatches:
-        raise FrankaAsyncPolicyContractError(
-            f"Franka checkpoint manifest contract mismatch: {mismatches}"
-        )
+        raise FrankaAsyncPolicyContractError(f"Franka checkpoint manifest contract mismatch: {mismatches}")
 
     file_manifest = manifest.get("files")
     if not isinstance(file_manifest, dict):
         raise FrankaAsyncPolicyContractError("Franka checkpoint manifest has no file ledger")
 
+    tracked_paths: dict[str, tuple[Path, str]] = {}
     for name in _MANIFEST_TRACKED_FILES:
         path = checkpoint_dir / name
         if not path.is_file():
@@ -270,6 +508,11 @@ def validate_franka_checkpoint(pretrained_path: str | Path) -> Path:
         digest = record.get("sha256")
         if not isinstance(digest, str) or len(digest) != 64:
             raise FrankaAsyncPolicyContractError(f"Invalid SHA-256 ledger entry for {name}")
+        tracked_paths[name] = (path, digest)
+
+    metadata_names = tuple(name for name in _MANIFEST_TRACKED_FILES if name != "model.safetensors")
+    for name in metadata_names:
+        path, digest = tracked_paths[name]
         actual_digest = _sha256_file(path)
         if actual_digest != digest:
             raise FrankaAsyncPolicyContractError(
@@ -278,7 +521,35 @@ def validate_franka_checkpoint(pretrained_path: str | Path) -> Path:
 
     _validate_processor_state_files(checkpoint_dir, "policy_preprocessor.json")
     _validate_processor_state_files(checkpoint_dir, "policy_postprocessor.json")
-    _validate_geometry_and_stats_manifests(checkpoint_dir)
+    contract = _validate_geometry_and_stats_manifests(
+        checkpoint_dir,
+        expected_fps=expected_fps,
+        expected_actions_per_chunk=expected_actions_per_chunk,
+    )
+
+    model_path, model_digest = tracked_paths["model.safetensors"]
+    actual_model_digest = _sha256_file(model_path)
+    if actual_model_digest != model_digest:
+        raise FrankaAsyncPolicyContractError(
+            "Checkpoint file SHA-256 mismatch for model.safetensors: "
+            f"declared={model_digest}, actual={actual_model_digest}"
+        )
+    return checkpoint_dir, contract
+
+
+def validate_franka_checkpoint(
+    pretrained_path: str | Path,
+    *,
+    expected_fps: int | None = None,
+    expected_actions_per_chunk: int | None = None,
+) -> Path:
+    """Validate a Franka checkpoint and return its resolved local directory."""
+
+    checkpoint_dir, _ = _validate_franka_checkpoint(
+        pretrained_path,
+        expected_fps=expected_fps,
+        expected_actions_per_chunk=expected_actions_per_chunk,
+    )
     return checkpoint_dir
 
 
@@ -386,8 +657,14 @@ class FrankaPI0PolicyServer(PolicyServer):
             )
         if self.device is None:
             raise FrankaAsyncPolicyContractError("Policy device is unset before Franka checkpoint load")
+        if self.actions_per_chunk is None or self.actions_per_chunk <= 0:
+            raise FrankaAsyncPolicyContractError("actions_per_chunk is unset before Franka checkpoint load")
 
-        checkpoint_dir = validate_franka_checkpoint(pretrained_name_or_path)
+        checkpoint_dir, contract = _validate_franka_checkpoint(
+            pretrained_name_or_path,
+            expected_fps=self.config.fps,
+            expected_actions_per_chunk=self.actions_per_chunk,
+        )
         config = build_pi0_full_finetune_config(checkpoint_dir, device=self.device)
         policy = PI0Policy(config)
         canonicalize_pi0_full_training_graph(policy)
@@ -400,7 +677,15 @@ class FrankaPI0PolicyServer(PolicyServer):
         policy.eval()
         if policy.training:
             raise FrankaAsyncPolicyContractError("Franka PI0 policy remained in training mode after eval()")
-        self.logger.info("Strictly loaded Franka PI0 checkpoint from %s", checkpoint_dir)
+        self._checkpoint_contract = contract
+        self.logger.info(
+            "Strictly loaded Franka PI0 checkpoint from %s | profile=%s task=%r fps=%s chunk_size=%s",
+            checkpoint_dir,
+            contract.profile,
+            contract.task_instruction,
+            contract.observation_fps,
+            contract.chunk_size,
+        )
         return policy
 
     def _extract_anchor_state(self, observation_t: TimedObservation) -> np.ndarray:
@@ -437,6 +722,14 @@ class FrankaPI0PolicyServer(PolicyServer):
             raise FrankaAsyncPolicyContractError("LeRobot observation features are unset")
 
         raw_observation = observation_t.get_observation()
+        contract = getattr(self, "_checkpoint_contract", None)
+        if contract is not None:
+            task = raw_observation.get("task")
+            if not isinstance(task, str) or task != contract.task_instruction:
+                raise FrankaAsyncPolicyContractError(
+                    "Franka observation task does not match the selected checkpoint: "
+                    f"expected={contract.task_instruction!r}, actual={task!r}"
+                )
         try:
             lerobot_observation = make_lerobot_observation(
                 raw_observation,
@@ -494,7 +787,9 @@ class FrankaPI0PolicyServer(PolicyServer):
                 target_shape[2],
             ).contiguous()
 
-        if "task" in raw_observation:
+        if contract is not None:
+            prepared["task"] = contract.task_instruction
+        elif "task" in raw_observation:
             prepared["task"] = raw_observation["task"]
         return prepared
 
@@ -536,6 +831,9 @@ __all__ = [
     "FRANKA_RENAME_MAP",
     "FRANKA_STATE_NAMES",
     "FrankaAsyncPolicyContractError",
+    "FrankaCheckpointContract",
     "FrankaPI0PolicyServer",
+    "inspect_franka_checkpoint_contract",
     "validate_franka_checkpoint",
+    "validate_franka_server_config",
 ]
