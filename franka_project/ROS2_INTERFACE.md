@@ -21,7 +21,7 @@ absolute Cartesian action chunk 发布到隔离的 `/lerobot/` topic。
 | `ros2_runtime.py` | 延迟加载 ROS bindings，创建 private `rclpy` context/node/executor，订阅 observation，发布 `CartesianActionChunk` |
 | `ros2_backend.py` | 管理 ROS session/plan ID、observation cache、chunk TTL；逐步 `send_action()` 只记录 bookkeeping，不发布 ROS 命令 |
 | `franka_ros.py` | 在 `dry_run=true` 和非执行 ROS2 backend 之间选择，保持 LeRobot `Robot` 特征契约 |
-| `ros2_client.py` | 继承 stock `RobotClient`，在 `latest_only` queue aggregation 边界将完整 accepted chunk 发布一次 |
+| `ros2_client.py` | 继承 stock `RobotClient`，按 PI0/FastWAM 选择 camera wire profile，并在 `latest_only` queue aggregation 边界将完整 accepted chunk 发布一次 |
 | `lerobot_franka_interfaces` | 提供 `CartesianActionChunk.msg`，以及供未来 gateway 使用的 `CartesianActionChunkAck.msg`、`SafetyGatewayStatus.msg` wire schema |
 
 ROS imports 是 lazy 的：import `lerobot_robot_franka_ros` 或执行 dry-run 时不会 import
@@ -87,7 +87,7 @@ robot.ros2_interface_only: false
 | 配置字段 | 默认值 | ROS type | 方向 |
 |---|---|---|---|
 | `ros2_node_name` | `lerobot_franka_interface` | - | private runtime node |
-| `base_frame` | `base` | - | EEF/action Cartesian reference frame |
+| `base_frame` | `base` | 必须保持 `base` | EEF/action Cartesian reference frame；PI0/FastWAM checkpoint 均冻结在该坐标系 |
 | `camera1_topic` | `/camera1/camera1/color/image_raw` | `sensor_msgs/msg/Image` | ROS -> client |
 | `camera2_topic` | `/camera2/camera2/color/image_raw` | `sensor_msgs/msg/Image` | ROS -> client |
 | `eef_pose_topic` | `/franka_robot_state_broadcaster/current_pose` | `geometry_msgs/msg/PoseStamped` | ROS -> client |
@@ -128,6 +128,11 @@ ros2_shutdown_timeout_s: 5.0
 quaternion_norm_tolerance: 0.001
 ```
 
+这些是通用/PI0 历史默认值。当前 FastWAM move-cups checkpoint 的训练契约是
+`gripper_closed_position=0.8`、`gripper_max_skew_s<=0.01`；FastWAM client 会拒绝仍使用
+`0.4/0.05` 的配置。上真机前必须先确认现场 `JointState` 的实际单位和开闭端点，不能仅因
+训练 manifest 写了 `0.8` 就直接执行。
+
 gripper callback 在 `JointState.name` 中定位 `gripper_joint_name`，用下式转换并 clip 到
 `[0,1]`：
 
@@ -136,6 +141,17 @@ closed_0_1 =
     (joint_position - gripper_open_position)
     / (gripper_closed_position - gripper_open_position)
 ```
+
+反向执行时，当前 `CartesianActionChunk.gripper` 仍只承载 canonical `closed_0_1`；未来唯一的
+真机 gateway 应在驱动边界做：
+
+```text
+joint_target = gripper_open_position
+             + closed_0_1 * (gripper_closed_position - gripper_open_position)
+```
+
+对已确认的 `0.0/0.8` 标定即 `joint_target=0.8*closed_0_1`。这里没有 FastWAM 的 `0.04`：
+`0.04` 仅属于 server 输入 proprio 的 pseudo-finger 编码，绝不能用于输出关节命令。
 
 ## 4. Observation 同步和 policy projection
 
@@ -162,7 +178,8 @@ LeRobot 15 Hz control loop 不在读 observation 时阻塞等待多 topic。
 - 其他 encoding 和 compressed image 被拒绝；
 - camera1/camera2 必须为 HWC `uint8 [480,640,3]`；
 - 返回的图像和 sideband 都是 copy，不会将 policy preprocessing 的可变操作传回 callback cache；
-- camera1 继续映射为 `base_0_rgb`，camera2 继续映射为 `left_wrist_0_rgb`。
+- PI0 wire profile 将 camera1 映射为 `base_0_rgb`、camera2 映射为 `left_wrist_0_rgb`；
+- FastWAM wire profile 保持原始 `camera1`/`camera2` key，`rename_map={}`。
 
 ### 4.3 冻结的 10D policy state
 
@@ -205,7 +222,7 @@ robot.get_ros_sideband()
 ```
 
 获取。sideband 还包含 anchor/source timestamps、EEF xyz+xyzw、gripper 和 frame。qpos
-不加入 `FrankaRos.observation_features`，也不进入当前 PI0 `observation.state`。
+不加入 `FrankaRos.observation_features`，也不进入 PI0/FastWAM 的 canonical wire state10。
 如果把 qpos 直接加入 policy features，state 将从 10D 变为 17D，并被
 Franka PolicyServer 的 exact contract 拒绝。
 
@@ -252,7 +269,8 @@ float32[] gripper
 - `server_send_stamp` 是 PolicyServer 在整个 chunk 上标注的同一
   `server_send_timestamp`；
 - `valid_until` 是发布时将剩余 monotonic TTL 映射到本地 ROS clock 得到的过期时间；
-- `period` 当前等于 RobotClient `environment_dt`，15 Hz 时约为 `66,666,667 ns`；
+- `period` 当前等于 RobotClient `environment_dt`，PI0 15 Hz 示例约为 `66,666,667 ns`，
+  FastWAM 30 Hz 示例约为 `33,333,333 ns`；
 - `timesteps` 必须与 actions 一一对应且严格连续；
 - `poses` 是 `[x,y,z,qx,qy,qz,qw]`，位置单位 meter，quaternion 使用 `xyzw`；
 - `gripper` 与 `poses` 等长，`0.0=open`、`1.0=configured closed`。
@@ -301,14 +319,21 @@ GetActions
   -> stock control loop 逐点 pop，仅更新 bookkeeping
 ```
 
+当前 `_ready_to_send_observation()` 会等最新 ROS plan 报告执行完成后才采下一帧并开始下一次
+推理。因此这是第一阶段的 stop-and-go 策略：FastWAM 的 32 steps / 30 Hz chunk 约执行
+`1.067 s`，chunk 之间还会停顿一次完整 inference latency。若后续要求连续运动，必须先在
+safety gateway 中实现带 provenance/TTL 的安全 plan replacement，再让推理与当前 plan 重叠；
+不能只删除这个 gate。
+
 新 observation 的逻辑 timestep 在发送 RPC 前按下式生成：
 
 ```text
 observation_timestep = max(latest_action + action_offset, 0)
 ```
 
-`action_offset` 是 RobotClient 顶层配置，默认值为 `0`，保持原有编号语义。设置
-`--action_offset=1` 后，PolicyServer 的第一条 action 从本地已消费 cursor 的下一 timestep
+`action_offset` 是 RobotClient 顶层配置；stock 默认值仍为 `0`，但
+`FrankaRos2RobotClient` 必须显式使用 `--action_offset=1`，否则会在每个新 chunk 中固定丢掉
+第一条 waypoint。设置为 `1` 后，PolicyServer 的第一条 action 从本地已消费 cursor 的下一 timestep
 开始编号。假设创建 observation 时 `latest_action=L`，且等待返回期间该 cursor 没有继续推进，
 50-step server chunk 会从 `L+1` 到 `L+50`，因而 50 条都会通过 fresh filter。若推理/传输期间
 cursor 又推进了 `m` 步，前 `m` 条仍属于真正 stale action，会按现有规则裁剪；因此该参数消除
@@ -414,6 +439,8 @@ ros2 topic info --verbose /gripper/joint_states
 PolicyServer 和 KML tunnel 已启动后，使用专用 client，不再使用 stock
 `lerobot.async_inference.robot_client` 入口：
 
+PI0 示例：
+
 ```bash
 cd /home/pnp/Projects/lerobot
 
@@ -423,6 +450,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.id=franka_ros2_interface \
   --robot.dry_run=false \
   --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
   --task='stack the cups' \
   --policy_type=pi0 \
   --pretrained_name_or_path=server-owned \
@@ -437,6 +465,39 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --pending_observation_timeout_s=10 \
   '--rename_map={"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}'
 ```
+
+当前 FastWAM move-cups checkpoint 示例（注意 task、30 Hz、32 steps、空 rename map 和
+`0.8/0.01` gripper contract）：
+
+```bash
+python -m lerobot_robot_franka_ros.ros2_client \
+  --server_address=127.0.0.1:8080 \
+  --robot.type=franka_ros \
+  --robot.id=franka_fastwam_ros2 \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
+  --robot.gripper_open_position=0.0 \
+  --robot.gripper_closed_position=0.8 \
+  --robot.gripper_max_skew_s=0.01 \
+  --task='move the paper cup from one end of the can to the other.' \
+  --policy_type=fastwam \
+  --pretrained_name_or_path=server-owned \
+  --policy_device=cpu \
+  --client_device=cpu \
+  --actions_per_chunk=32 \
+  --action_offset=1 \
+  --fps=30 \
+  --chunk_size_threshold=0.5 \
+  --aggregate_fn_name=latest_only \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=30 \
+  '--rename_map={}'
+```
+
+client/server 握手会双向拒绝 protocol、FPS、policy type 或 chunk size 不一致：server 校验
+client 请求，client 再校验 server 返回的 `PolicySetupAck`。task 在第一帧 observation 到达
+server 时与 checkpoint 的固定 instruction 做 exact match。
 
 可通过下列命令检查这一隔离边界：
 

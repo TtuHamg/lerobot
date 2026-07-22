@@ -1,6 +1,6 @@
-# Franka PI0 client-server dry-run runbook
+# Franka PI0 / FastWAM client-server runbook
 
-本 runbook 只覆盖已经批准的第一阶段：LeRobot client 与 PI0 server 异步通信。
+本 runbook 覆盖 LeRobot client 与 PI0/FastWAM server 的异步通信。
 本文命令让 Franka 插件读取冻结 observation fixture，并把返回动作写入 JSONL；
 它不会 import ROS、连接 controller 或驱动真机。后续新增的非执行 ROS2 interface 另见
 [`ROS2_INTERFACE.md`](./ROS2_INTERFACE.md)，不改变本文 dry-run 验收范围。
@@ -15,7 +15,7 @@ stock RobotClient
   -> KML gateway 映射到 0.0.0.0:16782
   -> WebSocket tunnel server
   -> 127.0.0.1:15173
-  -> FrankaPI0PolicyServer
+  -> FrankaPI0PolicyServer 或 FrankaFastWAMPolicyServer
 ```
 
 KML URL 使用 `wss://.../ws`，不追加 `:16782`。`16782` 是 gateway 在 KML 机器上的
@@ -83,7 +83,12 @@ python -m pip install aiohttp
 python -m lerobot.async_inference.robot_client --help | grep franka_ros
 ```
 
-## 2. KML：启动 PI0 server
+## 2. KML：启动 policy server
+
+`serve_franka_pi0_async.py` 保留历史文件名以兼容旧命令；实际 backend 由
+`--policy_type=pi0|fastwam` 在进程启动时选择，不支持运行中热切换。
+
+### 2.1 PI0
 
 Checkpoint 不提交到 Git。先把完整 `pretrained_model` 目录放在 server 本地，并设置绝对路径：
 
@@ -127,6 +132,63 @@ Launcher 会从所选 checkpoint 的 `config.json`、geometry manifest 和 stats
 task、profile、FPS 与 chunk size，并 fail-fast 检查它们和 CLI 输入一致；不再写死 15 Hz 或
 50-step chunk。上面是杯子 checkpoint 的 15 Hz 示例；薯片 native30 checkpoint 应把 server
 和 client 的 `--fps` 都改为 `30`。完整文件 hash 校验和模型加载在第一次 client 握手时执行。
+
+### 2.2 FastWAM move-cups checkpoint
+
+当前批准的 FastWAM artifact 被
+[`manifests/fastwam_move_cups_step_019650.json`](./manifests/fastwam_move_cups_step_019650.json)
+锁定。server 启动时会校验 checkpoint、runtime YAML、dataset contract、训练统计、文本
+embedding、Wan VAE、FastWAM Python source tree 和 pyproject 的 size/SHA-256；同名但内容不同的
+文件会被拒绝。
+
+现有 `lerobot` conda 环境缺少 Hydra/OmegaConf/FastWAM runtime，现有 `fastwam` 环境则是
+Python 3.10，低于本仓库要求的 Python 3.12。真实模型启动前必须先准备并验证一个 Python
+3.12 serving 环境；不要直接把两个项目完整依赖集合强行覆盖安装到任一现有环境。本提交已
+验证 artifact 契约和无模型 inference 路径，尚未完成 12 GB 权重的真实 CUDA load smoke。
+
+环境准备完成后先检查：
+
+```bash
+python -c 'import torch, hydra, omegaconf, boto3; import fastwam.runtime; print(torch.__version__)'
+```
+
+再启动：
+
+```bash
+export FASTWAM_CHECKPOINT=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/franka_eef_move_cups/checkpoints/weights/step_019650.pt
+export DIFFSYNTH_MODEL_BASE_PATH=/m2v_intern/tujiahang/Projects/FastWAM/checkpoints
+
+cd /m2v_intern/tujiahang/Projects/lerobot
+
+CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=fastwam \
+  --pretrained_name_or_path="$FASTWAM_CHECKPOINT" \
+  --actions_per_chunk=32 \
+  --policy_device=cuda
+```
+
+固定 task 是：
+
+```text
+move the paper cup from one end of the can to the other.
+```
+
+FastWAM client 必须保持 `rename_map={}`；PI0 的相机 rename map 不能复用。client/server 握手
+会同时校验 protocol version、FPS、policy type 和 chunk size。server 必须返回显式
+`PolicySetupAck`，client 会核对其中的 resolved contract；误连旧 server 时响应会解码成全零
+默认值并被拒绝，因此新旧任一端未同步都不能进入 observation/action loop。
+
+FastWAM 模型的第 7 维输出是 absolute `gripper.open_target_0_1`。server 在逐行累计 pose delta
+后转换成 canonical `closed_0_1 = 1 - clip(open, 0, 1)`，再把 absolute8 发给 client。
+`0.04` 只用于把输入 proprio 的开合比例编码成左右 pseudo-finger 米制位置
+`[+0.04*open, -0.04*open]`；它绝不能乘到输出命令上。若后续 gripper driver 需要原始关节单位，
+应在机器人侧按实测标定把 `closed_0_1` 映射到 `[raw_open, raw_closed]`。
 
 ## 3. KML：启动 16782 tunnel server
 

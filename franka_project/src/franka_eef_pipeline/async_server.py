@@ -1,4 +1,4 @@
-"""Franka-specific adapter for LeRobot's asynchronous policy server.
+"""Franka-specific adapters for LeRobot's asynchronous policy server.
 
 The transport, request handling, policy-processor orchestration, and action
 timing remain owned by :class:`lerobot.async_inference.PolicyServer`.
@@ -8,22 +8,39 @@ server cannot infer:
 * reproduce the training-time, aspect-ratio-preserving PI0 camera resize;
 * restore the project's unprefixed, full-parameter PI0 checkpoint strictly;
 * decode the model's 7D anchor-relative Cartesian actions into absolute 8D
-  ``[xyz, quaternion_xyzw, gripper]`` targets before they leave the server.
+  ``[xyz, quaternion_xyzw, gripper]`` targets before they leave the server;
+* reconstruct and run a native-EEF FastWAM checkpoint with its frozen image,
+  proprio, normalization, text-context, and adjacent-action contracts.
+
+One server process owns exactly one policy backend.  The launcher selects the
+PI0 or FastWAM servicer at startup from ``PolicyServerConfig.policy_type``;
+models are never hot-swapped while a robot session is active.
 """
 
 from __future__ import annotations
 
+import gc
 import hashlib
+import importlib
 import json
+import os
+import pickle
+import re
+import sys
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+import yaml
+from PIL import Image
 
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import (
+    ASYNC_INFERENCE_PROTOCOL_VERSION,
     Observation,
     RemotePolicyConfig,
     TimedAction,
@@ -31,7 +48,7 @@ from lerobot.async_inference.helpers import (
     make_lerobot_observation,
 )
 from lerobot.async_inference.policy_server import PolicyServer
-from lerobot.policies.pi0.modeling_pi0 import PI0Policy, resize_with_pad_torch
+from lerobot.transport import services_pb2
 from lerobot.utils.constants import OBS_STATE
 
 from .geometry import (
@@ -39,17 +56,15 @@ from .geometry import (
     enforce_quaternion_continuity,
     matrix_to_quaternion_xyzw,
     rotation_6d_to_matrix,
-)
-from .pi0_training import (
-    ACTION_DIM,
-    PI0_CORE_WEIGHTS_NAMESPACE,
-    STATE_DIM,
-    build_pi0_full_finetune_config,
-    canonicalize_pi0_full_training_graph,
-    load_pi0_full_checkpoint_weights,
+    so3_exp,
+    so3_log,
 )
 
+
 FRANKA_CHECKPOINT_TYPE = "franka_pi0_full_parameter_eef"
+PI0_CORE_WEIGHTS_NAMESPACE = "pi0_core_unprefixed"
+STATE_DIM = 10
+ACTION_DIM = 7
 ABSOLUTE_ACTION_DIM = 8
 FRANKA_STATE_NAMES = (
     "eef.x",
@@ -68,10 +83,33 @@ FRANKA_CAMERA_KEYS = (
     "observation.images.camera1",
     "observation.images.camera2",
 )
-FRANKA_RENAME_MAP = {
+FRANKA_PI0_RENAME_MAP = {
     "observation.images.camera1": "observation.images.base_0_rgb",
     "observation.images.camera2": "observation.images.left_wrist_0_rgb",
 }
+# Compatibility alias retained for existing client commands and imports.
+FRANKA_RENAME_MAP = FRANKA_PI0_RENAME_MAP
+FRANKA_FASTWAM_RENAME_MAP: dict[str, str] = {}
+FRANKA_POLICY_TYPES = ("pi0", "fastwam")
+
+FASTWAM_STATE_DIM = 8
+FASTWAM_ACTION_DIM = 7
+FASTWAM_RUNTIME_CONFIG_NAME = "fastwam_runtime.resolved.yaml"
+FASTWAM_DATASET_CONTRACT_NAME = "dataset_contract.json"
+FASTWAM_RUN_STATS_NAME = "dataset_stats.json"
+FASTWAM_PROMPT_TEMPLATE = (
+    "A video recorded from a robot's point of view executing the following instruction: {task}"
+)
+FASTWAM_CONTEXT_WIDTH = 4096
+FASTWAM_FINGER_SCALE = 0.04
+FASTWAM_FINGER_SIGNS = (1.0, -1.0)
+FASTWAM_CHECKPOINT_PATTERN = re.compile(r"^step_(\d+)\.pt$")
+FASTWAM_DEPLOYMENT_MANIFESTS = {
+    ("franka_eef_move_cups", "step_019650.pt"): "fastwam_move_cups_step_019650.json",
+}
+FASTWAM_WAN_VAE_RELATIVE_PATH = Path(
+    "DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
+)
 
 _MANIFEST_NAME = "franka_pi0_checkpoint_manifest.json"
 _MANIFEST_TRACKED_FILES = (
@@ -109,6 +147,78 @@ class FrankaCheckpointContract:
     rollout_authorization_declared: bool
 
 
+@dataclass(frozen=True)
+class FrankaFastWAMCheckpointContract:
+    """Frozen native-EEF FastWAM serving inputs derived from one training run."""
+
+    checkpoint_path: Path
+    run_dir: Path
+    runtime_config_path: Path
+    stats_path: Path
+    text_context_path: Path
+    deployment_manifest_path: Path
+    vae_path: Path
+    task_instruction: str
+    observation_fps: int
+    action_fps: int
+    chunk_size: int
+    image_height: int
+    image_width: int
+    context_len: int
+    model_id: str
+    checkpoint_step: int
+    model_dtype: str
+    num_inference_steps: int
+    seed: int
+    finger_scale: float
+    finger_signs: tuple[float, float]
+
+
+FrankaServingContract = FrankaCheckpointContract | FrankaFastWAMCheckpointContract
+
+
+@dataclass(frozen=True)
+class _FastWAMMinMaxNormalizer:
+    """Exact frozen min/max normalization used by this FastWAM run."""
+
+    state_min: torch.Tensor
+    state_max: torch.Tensor
+    action_min: torch.Tensor
+    action_max: torch.Tensor
+
+    def normalize_state(self, state: torch.Tensor) -> torch.Tensor:
+        value = torch.as_tensor(state, dtype=torch.float32, device="cpu")
+        if value.ndim == 1:
+            value = value.unsqueeze(0)
+        if tuple(value.shape) != (1, FASTWAM_STATE_DIM):
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM state must have shape [1,{FASTWAM_STATE_DIM}], got {tuple(value.shape)}"
+            )
+        if not bool(torch.isfinite(value).all()):
+            raise FrankaAsyncPolicyContractError("FastWAM state contains NaN or Inf")
+        normalized = 2.0 * (value - self.state_min) / (self.state_max - self.state_min) - 1.0
+        return torch.clamp(normalized, -5.0, 5.0)
+
+    def denormalize_action(self, action: torch.Tensor) -> torch.Tensor:
+        value = torch.as_tensor(action, dtype=torch.float32, device="cpu")
+        if value.ndim != 2 or value.shape[1] != FASTWAM_ACTION_DIM or value.shape[0] <= 0:
+            raise FrankaAsyncPolicyContractError(
+                f"Normalized FastWAM action must have shape [K,{FASTWAM_ACTION_DIM}], "
+                f"got {tuple(value.shape)}"
+            )
+        if not bool(torch.isfinite(value).all()):
+            raise FrankaAsyncPolicyContractError("Normalized FastWAM action contains NaN or Inf")
+        return self.action_min + 0.5 * (value + 1.0) * (self.action_max - self.action_min)
+
+
+@dataclass(frozen=True)
+class _FastWAMRuntime:
+    model: Any
+    normalizer: _FastWAMMinMaxNormalizer
+    context: torch.Tensor
+    context_mask: torch.Tensor
+
+
 def _read_json_object(path: Path) -> dict[str, Any]:
     try:
         with path.open(encoding="utf-8") as stream:
@@ -120,12 +230,219 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return value
 
 
+def _read_yaml_object(path: Path) -> dict[str, Any]:
+    try:
+        with path.open(encoding="utf-8") as stream:
+            value = yaml.safe_load(stream)
+    except (OSError, yaml.YAMLError) as exc:
+        raise FrankaAsyncPolicyContractError(f"Could not read valid YAML from {path}") from exc
+    if not isinstance(value, dict):
+        raise FrankaAsyncPolicyContractError(f"Expected a YAML object in {path}")
+    return value
+
+
+def _mapping(value: Any, *, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise FrankaAsyncPolicyContractError(f"{name} must be an object")
+    return value
+
+
+def _configured_path(value: Any, *, config_path: Path, name: str) -> Path:
+    path_value = _nonempty_string(value, name=name)
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = config_path.parent / path
+    return path.resolve()
+
+
+def _fastwam_stats_vector(
+    stats: Mapping[str, Any],
+    *,
+    group: str,
+    statistic: str,
+    dimension: int,
+    path: Path,
+) -> torch.Tensor:
+    group_stats = _mapping(stats.get(group), name=f"{path}:{group}")
+    default_stats = _mapping(group_stats.get("default"), name=f"{path}:{group}.default")
+    try:
+        value = torch.as_tensor(default_stats[f"global_{statistic}"], dtype=torch.float32)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError(
+            f"{path}:{group}.default.global_{statistic} must be a numeric vector"
+        ) from exc
+    if tuple(value.shape) != (dimension,) or not bool(torch.isfinite(value).all()):
+        raise FrankaAsyncPolicyContractError(
+            f"{path}:{group}.default.global_{statistic} must be finite shape ({dimension},)"
+        )
+    return value
+
+
+def _load_fastwam_minmax_normalizer(path: Path) -> _FastWAMMinMaxNormalizer:
+    stats = _read_json_object(path)
+    state_min = _fastwam_stats_vector(
+        stats,
+        group="state",
+        statistic="min",
+        dimension=FASTWAM_STATE_DIM,
+        path=path,
+    )
+    state_max = _fastwam_stats_vector(
+        stats,
+        group="state",
+        statistic="max",
+        dimension=FASTWAM_STATE_DIM,
+        path=path,
+    )
+    action_min = _fastwam_stats_vector(
+        stats,
+        group="action",
+        statistic="min",
+        dimension=FASTWAM_ACTION_DIM,
+        path=path,
+    )
+    action_max = _fastwam_stats_vector(
+        stats,
+        group="action",
+        statistic="max",
+        dimension=FASTWAM_ACTION_DIM,
+        path=path,
+    )
+    # The frozen processor's SingleFieldLinearNormalizer has special behavior
+    # for ranges below 1e-4.  This run has no such dimensions; reject drift
+    # instead of silently using a different formula.
+    for name, minimum, maximum in (
+        ("state", state_min, state_max),
+        ("action", action_min, action_max),
+    ):
+        value_range = maximum - minimum
+        if bool(torch.any(value_range < 1e-4)):
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM {name} stats contain a range below the frozen 1e-4 tolerance"
+            )
+    return _FastWAMMinMaxNormalizer(
+        state_min=state_min,
+        state_max=state_max,
+        action_min=action_min,
+        action_max=action_max,
+    )
+
+
 def _sha256_file(path: Path, *, chunk_bytes: int = 8 * 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         while chunk := stream.read(chunk_bytes):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_python_tree(root: Path) -> tuple[int, str]:
+    """Hash Python source names and bytes in a stable, checkout-independent order."""
+
+    files = sorted(root.rglob("*.py")) if root.is_dir() else []
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return len(files), digest.hexdigest()
+
+
+def _fastwam_deployment_manifest_path(checkpoint: Path, run_dir: Path) -> Path:
+    manifest_name = FASTWAM_DEPLOYMENT_MANIFESTS.get((run_dir.name, checkpoint.name))
+    if manifest_name is None:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM checkpoint is not approved by a deployment manifest: "
+            f"run={run_dir.name!r}, checkpoint={checkpoint.name!r}"
+        )
+    path = Path(__file__).resolve().parents[2] / "manifests" / manifest_name
+    if not path.is_file():
+        raise FrankaAsyncPolicyContractError(f"FastWAM deployment manifest is missing: {path}")
+    return path
+
+
+def _verify_fastwam_deployment_manifest(
+    manifest_path: Path,
+    *,
+    run_dir: Path,
+    checkpoint_step: int,
+    task_instruction: str,
+    files: Mapping[str, Path],
+    source_root: Path,
+) -> None:
+    manifest = _read_json_object(manifest_path)
+    expected_header = {
+        "schema_version": 1,
+        "policy_type": "fastwam",
+        "run_name": run_dir.name,
+        "checkpoint_step": checkpoint_step,
+        "task_instruction": task_instruction,
+    }
+    actual_header = {key: manifest.get(key) for key in expected_header}
+    if actual_header != expected_header:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM deployment manifest header mismatch: expected={expected_header}, "
+            f"actual={actual_header}"
+        )
+
+    ledger = _mapping(manifest.get("files"), name="FastWAM deployment manifest files")
+    if set(ledger) != set(files):
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM deployment manifest file roles mismatch: "
+            f"expected={sorted(files)}, actual={sorted(ledger)}"
+        )
+    for role, path in files.items():
+        record = _mapping(ledger.get(role), name=f"FastWAM deployment file {role}")
+        suffix = _nonempty_string(
+            record.get("path_suffix"), name=f"FastWAM deployment file {role}.path_suffix"
+        )
+        declared_size = record.get("size_bytes")
+        declared_digest = _sha256_string(
+            record.get("sha256"), name=f"FastWAM deployment file {role}.sha256"
+        )
+        if not path.is_file() or not path.as_posix().endswith(suffix):
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM deployment file {role} is missing or has unexpected path: {path}"
+            )
+        if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size <= 0:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM deployment file {role}.size_bytes must be a positive integer"
+            )
+        actual_size = path.stat().st_size
+        if actual_size != declared_size:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM deployment file {role} size mismatch: "
+                f"declared={declared_size}, actual={actual_size}"
+            )
+        actual_digest = _sha256_file(path)
+        if actual_digest != declared_digest:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM deployment file {role} SHA-256 mismatch: "
+                f"declared={declared_digest}, actual={actual_digest}"
+            )
+
+    source_record = _mapping(
+        manifest.get("fastwam_source_tree"), name="FastWAM deployment source tree"
+    )
+    source_suffix = _nonempty_string(
+        source_record.get("path_suffix"), name="FastWAM source tree.path_suffix"
+    )
+    if not source_root.as_posix().endswith(source_suffix):
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM source tree has unexpected path: {source_root}"
+        )
+    declared_count = source_record.get("python_file_count")
+    declared_source_digest = _sha256_string(
+        source_record.get("sha256"), name="FastWAM source tree.sha256"
+    )
+    actual_count, actual_source_digest = _sha256_python_tree(source_root)
+    if actual_count != declared_count or actual_source_digest != declared_source_digest:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM source tree does not match the deployment manifest: "
+            f"declared=(count={declared_count}, sha256={declared_source_digest}), "
+            f"actual=(count={actual_count}, sha256={actual_source_digest})"
+        )
 
 
 def _validate_processor_state_files(checkpoint_dir: Path, config_name: str) -> None:
@@ -420,15 +737,312 @@ def inspect_franka_checkpoint_contract(
     )
 
 
-def validate_franka_server_config(config: PolicyServerConfig) -> FrankaCheckpointContract:
+def _shape_meta_dimension(shape_meta: Mapping[str, Any], group: str) -> int:
+    items = shape_meta.get(group)
+    if not isinstance(items, list) or not items:
+        raise FrankaAsyncPolicyContractError(f"FastWAM shape_meta.{group} must be a non-empty list")
+    total = 0
+    for item in items:
+        entry = _mapping(item, name=f"FastWAM shape_meta.{group} item")
+        shape = entry.get("shape")
+        if isinstance(shape, bool) or not isinstance(shape, int) or shape <= 0:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM shape_meta.{group} item has invalid shape {shape!r}"
+            )
+        total += shape
+    return total
+
+
+def inspect_fastwam_checkpoint_contract(
+    pretrained_path: str | Path,
+    *,
+    expected_fps: int | None = None,
+    expected_actions_per_chunk: int | None = None,
+) -> FrankaFastWAMCheckpointContract:
+    """Validate the frozen FastWAM run without importing FastWAM or loading 12 GB of weights."""
+
+    checkpoint = Path(pretrained_path).expanduser().resolve()
+    if not checkpoint.is_file() or checkpoint.suffix != ".pt" or checkpoint.stat().st_size <= 0:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM pretrained path must be a non-empty local .pt file: {checkpoint}"
+        )
+    match = FASTWAM_CHECKPOINT_PATTERN.fullmatch(checkpoint.name)
+    if match is None:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM checkpoint name must match step_<number>.pt, got {checkpoint.name!r}"
+        )
+    if checkpoint.parent.name != "weights" or checkpoint.parent.parent.name != "checkpoints":
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM checkpoint must live at RUN/checkpoints/weights/step_<number>.pt"
+        )
+    checkpoint_step = int(match.group(1))
+    run_dir = checkpoint.parent.parent.parent
+    deployment_manifest_path = _fastwam_deployment_manifest_path(checkpoint, run_dir)
+    fastwam_repo = run_dir.parents[2]
+    source_root = fastwam_repo / "src" / "fastwam"
+    model_base = Path(
+        os.environ.get("DIFFSYNTH_MODEL_BASE_PATH", str(fastwam_repo / "checkpoints"))
+    ).expanduser().resolve()
+    vae_path = (model_base / FASTWAM_WAN_VAE_RELATIVE_PATH).resolve()
+    runtime_path = run_dir / FASTWAM_RUNTIME_CONFIG_NAME
+    contract_path = run_dir / FASTWAM_DATASET_CONTRACT_NAME
+    run_stats_path = run_dir / FASTWAM_RUN_STATS_NAME
+    for label, path in (
+        ("runtime config", runtime_path),
+        ("dataset contract", contract_path),
+        ("run normalization stats", run_stats_path),
+    ):
+        if not path.is_file():
+            raise FrankaAsyncPolicyContractError(f"FastWAM {label} is missing: {path}")
+
+    runtime = _read_yaml_object(runtime_path)
+    dataset_contract = _read_json_object(contract_path)
+    representation = _mapping(dataset_contract.get("representation"), name="FastWAM representation")
+    state_contract = _mapping(representation.get("state"), name="FastWAM state representation")
+    action_contract = _mapping(representation.get("action"), name="FastWAM action representation")
+    gripper_calibration = _mapping(
+        representation.get("gripper_calibration"), name="FastWAM gripper calibration"
+    )
+    temporal = _mapping(dataset_contract.get("temporal"), name="FastWAM temporal contract")
+    image_contract = _mapping(dataset_contract.get("images"), name="FastWAM image contract")
+    task_contract = _mapping(dataset_contract.get("task"), name="FastWAM task contract")
+
+    if state_contract.get("dim") != FASTWAM_STATE_DIM:
+        raise FrankaAsyncPolicyContractError("FastWAM state contract must be 8D")
+    if state_contract.get("type") != "eef_absolute_axis_angle_with_pseudo_fingers":
+        raise FrankaAsyncPolicyContractError("FastWAM state representation type mismatch")
+    if state_contract.get("rotation") != "principal_axis_angle_rad" or state_contract.get("frame") != "base":
+        raise FrankaAsyncPolicyContractError("FastWAM state rotation/frame contract mismatch")
+    finger_scale = float(state_contract.get("finger_scale", float("nan")))
+    finger_sign_values = state_contract.get("finger_signs")
+    if (
+        not np.isfinite(finger_scale)
+        or finger_scale != FASTWAM_FINGER_SCALE
+        or not isinstance(finger_sign_values, list)
+        or tuple(finger_sign_values) != FASTWAM_FINGER_SIGNS
+    ):
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM pseudo-finger contract must be scale=0.04 and signs=(1,-1)"
+        )
+    finger_signs = (float(finger_sign_values[0]), float(finger_sign_values[1]))
+
+    expected_action_contract = {
+        "dim": FASTWAM_ACTION_DIM,
+        "type": "adjacent_delta_eef",
+        "translation": "p[t+1]-p[t] in base frame, meter",
+        "rotation": "Log(R[t].T @ R[t+1]) body rotvec, radian",
+        "gripper": "absolute next target; 0=closed, 1=open",
+        "delta_dimension_mask": [True, True, True, True, True, True, False],
+    }
+    actual_action_contract = {key: action_contract.get(key) for key in expected_action_contract}
+    if actual_action_contract != expected_action_contract:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM action representation mismatch: "
+            f"expected={expected_action_contract}, actual={actual_action_contract}"
+        )
+    if gripper_calibration.get("raw_open") != 0.0 or gripper_calibration.get("raw_closed") != 0.8:
+        raise FrankaAsyncPolicyContractError("FastWAM gripper calibration must be raw_open=0.0/raw_closed=0.8")
+    if gripper_calibration.get("clip") is not True:
+        raise FrankaAsyncPolicyContractError("FastWAM gripper calibration must enable clipping")
+
+    observation_fps = _positive_int(temporal.get("fps"), name="FastWAM temporal.fps")
+    num_frames = _positive_int(temporal.get("num_frames"), name="FastWAM temporal.num_frames")
+    chunk_size = _positive_int(
+        temporal.get("action_horizon"), name="FastWAM temporal.action_horizon"
+    )
+    if num_frames != chunk_size + 1:
+        raise FrankaAsyncPolicyContractError("FastWAM num_frames must equal action_horizon + 1")
+    action_fps = observation_fps
+    if expected_fps is not None and expected_fps != observation_fps:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM server/checkpoint fps mismatch: server={expected_fps}, checkpoint={observation_fps}"
+        )
+    if expected_actions_per_chunk is not None and expected_actions_per_chunk != chunk_size:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM server/checkpoint actions_per_chunk mismatch: "
+            f"server={expected_actions_per_chunk}, checkpoint={chunk_size}"
+        )
+
+    image_height = _positive_int(image_contract.get("height"), name="FastWAM images.height")
+    image_width = _positive_int(image_contract.get("width"), name="FastWAM images.width")
+    expected_images = {
+        "preprocess": "center_crop",
+        "concat_multi_camera": "horizontal",
+        "ordered_camera_names": ["camera1", "camera2"],
+    }
+    actual_images = {key: image_contract.get(key) for key in expected_images}
+    if actual_images != expected_images:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM image contract mismatch: expected={expected_images}, actual={actual_images}"
+        )
+    cameras = dataset_contract.get("cameras")
+    expected_cameras = [
+        {"name": "camera1", "key": FRANKA_CAMERA_KEYS[0], "order": 0},
+        {"name": "camera2", "key": FRANKA_CAMERA_KEYS[1], "order": 1},
+    ]
+    if not isinstance(cameras, list):
+        raise FrankaAsyncPolicyContractError("FastWAM dataset contract has no camera list")
+    actual_cameras = [
+        {key: camera.get(key) for key in ("name", "key", "order")}
+        for camera in cameras
+        if isinstance(camera, Mapping)
+    ]
+    if actual_cameras != expected_cameras:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM camera order mismatch: expected={expected_cameras}, actual={actual_cameras}"
+        )
+    task_instruction = _nonempty_string(
+        task_contract.get("default_instruction"), name="FastWAM task.default_instruction"
+    )
+
+    data = _mapping(runtime.get("data"), name="FastWAM runtime.data")
+    train = _mapping(data.get("train"), name="FastWAM runtime.data.train")
+    model = _mapping(runtime.get("model"), name="FastWAM runtime.model")
+    processor = _mapping(train.get("processor"), name="FastWAM runtime processor")
+    shape_meta = _mapping(train.get("shape_meta"), name="FastWAM runtime shape_meta")
+    if _shape_meta_dimension(shape_meta, "state") != FASTWAM_STATE_DIM:
+        raise FrankaAsyncPolicyContractError("FastWAM runtime state dimension mismatch")
+    if _shape_meta_dimension(shape_meta, "action") != FASTWAM_ACTION_DIM:
+        raise FrankaAsyncPolicyContractError("FastWAM runtime action dimension mismatch")
+    runtime_camera_order = [
+        item.get("key")
+        for item in shape_meta.get("images", [])
+        if isinstance(item, Mapping)
+    ]
+    if runtime_camera_order != ["camera1", "camera2"]:
+        raise FrankaAsyncPolicyContractError("FastWAM runtime camera order must be camera1,camera2")
+    runtime_video_size = train.get("video_size")
+    if runtime_video_size != [image_height, image_width * 2]:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM runtime video_size must be {[image_height, image_width * 2]}"
+        )
+    if train.get("concat_multi_camera") != "horizontal" or train.get("num_frames") != num_frames:
+        raise FrankaAsyncPolicyContractError("FastWAM runtime temporal/image concatenation mismatch")
+    if (
+        processor.get("proprio_output_dim") != FASTWAM_STATE_DIM
+        or processor.get("action_output_dim") != FASTWAM_ACTION_DIM
+        or processor.get("use_stepwise_action_norm") is not False
+        or processor.get("norm_default_mode") != "min/max"
+        or processor.get("norm_exception_mode") is not None
+        or processor.get("action_state_transforms") is not None
+    ):
+        raise FrankaAsyncPolicyContractError("FastWAM runtime processor normalization contract mismatch")
+    if model.get("_target_") != "fastwam.runtime.create_fastwam":
+        raise FrankaAsyncPolicyContractError("FastWAM runtime model target mismatch")
+    video_dit = _mapping(model.get("video_dit_config"), name="FastWAM video_dit_config")
+    action_dit = _mapping(model.get("action_dit_config"), name="FastWAM action_dit_config")
+    if (
+        model.get("proprio_dim") != FASTWAM_STATE_DIM
+        or model.get("load_text_encoder") is not False
+        or video_dit.get("action_dim") != FASTWAM_ACTION_DIM
+        or action_dit.get("action_dim") != FASTWAM_ACTION_DIM
+        or video_dit.get("video_attention_mask_mode") != "first_frame_causal"
+    ):
+        raise FrankaAsyncPolicyContractError("FastWAM runtime model dimension/attention contract mismatch")
+
+    model_dtype = _nonempty_string(runtime.get("mixed_precision"), name="FastWAM mixed_precision")
+    if model_dtype != "bf16":
+        raise FrankaAsyncPolicyContractError(f"FastWAM runtime must use bf16, got {model_dtype!r}")
+    num_inference_steps = _positive_int(
+        runtime.get("eval_num_inference_steps"), name="FastWAM eval_num_inference_steps"
+    )
+    seed = runtime.get("seed")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise FrankaAsyncPolicyContractError(f"FastWAM seed must be a non-negative integer, got {seed!r}")
+    context_len = _positive_int(train.get("context_len"), name="FastWAM context_len")
+    model_id = _nonempty_string(model.get("model_id"), name="FastWAM model_id")
+
+    configured_stats_path = _configured_path(
+        train.get("pretrained_norm_stats"),
+        config_path=runtime_path,
+        name="FastWAM pretrained_norm_stats",
+    )
+    if not configured_stats_path.is_file():
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM configured normalization stats are missing: {configured_stats_path}"
+        )
+    # The runtime config points at the exact training-time statistics.  The
+    # run-local copy is an audit ledger and must agree, but is not the serving
+    # source of truth (it may have been reserialized at a different precision).
+    configured_normalizer = _load_fastwam_minmax_normalizer(configured_stats_path)
+    run_normalizer = _load_fastwam_minmax_normalizer(run_stats_path)
+    for field_name in ("state_min", "state_max", "action_min", "action_max"):
+        if not torch.equal(
+            getattr(run_normalizer, field_name), getattr(configured_normalizer, field_name)
+        ):
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM run/configured normalization stats differ for {field_name}"
+            )
+
+    text_cache_dir = _configured_path(
+        train.get("text_embedding_cache_dir"),
+        config_path=runtime_path,
+        name="FastWAM text_embedding_cache_dir",
+    )
+    prompt = FASTWAM_PROMPT_TEMPLATE.format(task=task_instruction)
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    encoder_id = re.sub(r"[^a-z0-9]+", "", model_id.split("/")[-1].lower()) or "textenc"
+    text_context_path = text_cache_dir / f"{prompt_hash}.t5_len{context_len}.{encoder_id}.pt"
+    if not text_context_path.is_file():
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM cached text context is missing for task {task_instruction!r}: {text_context_path}"
+        )
+
+    _verify_fastwam_deployment_manifest(
+        deployment_manifest_path,
+        run_dir=run_dir,
+        checkpoint_step=checkpoint_step,
+        task_instruction=task_instruction,
+        files={
+            "checkpoint": checkpoint,
+            "runtime_config": runtime_path,
+            "dataset_contract": contract_path,
+            "run_stats": run_stats_path,
+            "training_stats": configured_stats_path,
+            "text_context": text_context_path,
+            "wan_vae": vae_path,
+            "fastwam_pyproject": fastwam_repo / "pyproject.toml",
+        },
+        source_root=source_root,
+    )
+
+    return FrankaFastWAMCheckpointContract(
+        checkpoint_path=checkpoint,
+        run_dir=run_dir,
+        runtime_config_path=runtime_path,
+        stats_path=configured_stats_path,
+        text_context_path=text_context_path,
+        deployment_manifest_path=deployment_manifest_path,
+        vae_path=vae_path,
+        task_instruction=task_instruction,
+        observation_fps=observation_fps,
+        action_fps=action_fps,
+        chunk_size=chunk_size,
+        image_height=image_height,
+        image_width=image_width,
+        context_len=context_len,
+        model_id=model_id,
+        checkpoint_step=checkpoint_step,
+        model_dtype=model_dtype,
+        num_inference_steps=num_inference_steps,
+        seed=seed,
+        finger_scale=finger_scale,
+        finger_signs=finger_signs,
+    )
+
+
+def validate_franka_server_config(config: PolicyServerConfig) -> FrankaServingContract:
     """Validate CLI inputs against the selected checkpoint's own serving contract."""
 
     if config.host not in {"localhost", "127.0.0.1"}:
         raise ValueError(
             "Franka async server must bind to a loopback host because its transport is a trusted boundary"
         )
-    if config.policy_type != "pi0":
-        raise ValueError(f"Franka async server requires --policy_type=pi0, got {config.policy_type!r}")
+    if config.policy_type not in FRANKA_POLICY_TYPES:
+        raise ValueError(
+            f"Franka async server requires --policy_type in {FRANKA_POLICY_TYPES}, "
+            f"got {config.policy_type!r}"
+        )
     if config.pretrained_name_or_path is None:
         raise ValueError("Franka async server requires --pretrained_name_or_path")
     if config.actions_per_chunk is None:
@@ -436,7 +1050,12 @@ def validate_franka_server_config(config: PolicyServerConfig) -> FrankaCheckpoin
     if config.policy_device is None:
         raise ValueError("Franka async server requires --policy_device")
 
-    return inspect_franka_checkpoint_contract(
+    inspector = (
+        inspect_franka_checkpoint_contract
+        if config.policy_type == "pi0"
+        else inspect_fastwam_checkpoint_contract
+    )
+    return inspector(
         config.pretrained_name_or_path,
         expected_fps=config.fps,
         expected_actions_per_chunk=config.actions_per_chunk,
@@ -593,64 +1212,422 @@ def _decode_absolute_action_chunk(anchor_state: np.ndarray, relative_chunk: torc
     return torch.as_tensor(absolute, dtype=torch.float32, device="cpu")
 
 
+def _center_crop_resize_fastwam_image(
+    image: np.ndarray,
+    *,
+    target_height: int,
+    target_width: int,
+) -> np.ndarray:
+    value = np.asarray(image)
+    if value.shape != FRANKA_CAMERA_SHAPE:
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM camera must have shape {FRANKA_CAMERA_SHAPE}, got {value.shape}"
+        )
+    if value.dtype != np.uint8:
+        raise FrankaAsyncPolicyContractError(f"FastWAM camera must have dtype uint8, got {value.dtype}")
+    source_height, source_width = value.shape[:2]
+    source_aspect = source_width / source_height
+    target_aspect = target_width / target_height
+    pil = Image.fromarray(value)
+    if source_aspect > target_aspect:
+        crop_width = int(round(source_height * target_aspect))
+        left = (source_width - crop_width) // 2
+        pil = pil.crop((left, 0, left + crop_width, source_height))
+    else:
+        crop_height = int(round(source_width / target_aspect))
+        top = (source_height - crop_height) // 2
+        pil = pil.crop((0, top, source_width, top + crop_height))
+    pil = pil.resize((target_width, target_height), resample=Image.Resampling.BILINEAR)
+    return np.ascontiguousarray(np.asarray(pil, dtype=np.uint8))
+
+
+def _prepare_fastwam_image(
+    camera1: np.ndarray,
+    camera2: np.ndarray,
+    *,
+    target_height: int = 224,
+    target_width: int = 224,
+) -> torch.Tensor:
+    """Reproduce conversion-time center-crop and FastWAM horizontal camera concatenation."""
+
+    processed = [
+        _center_crop_resize_fastwam_image(
+            image,
+            target_height=target_height,
+            target_width=target_width,
+        )
+        for image in (camera1, camera2)
+    ]
+    combined = np.concatenate(processed, axis=1)
+    tensor = torch.from_numpy(combined).permute(2, 0, 1).to(dtype=torch.float32)
+    return tensor.mul_(2.0 / 255.0).sub_(1.0).unsqueeze(0).contiguous()
+
+
+def _build_fastwam_state(
+    state10: np.ndarray,
+    *,
+    finger_scale: float = FASTWAM_FINGER_SCALE,
+    finger_signs: tuple[float, float] = FASTWAM_FINGER_SIGNS,
+) -> np.ndarray:
+    """Convert canonical Franka state10 to FastWAM's frozen 8D proprio representation."""
+
+    state = np.asarray(state10, dtype=np.float64)
+    if state.shape != (STATE_DIM,) or not np.all(np.isfinite(state)):
+        raise FrankaAsyncPolicyContractError(
+            f"Franka state must be finite shape ({STATE_DIM},), got {state.shape}"
+        )
+    closed = float(state[-1])
+    if closed < 0.0 or closed > 1.0:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka gripper.closed_0_1 must be in [0,1], got {closed}"
+        )
+    if not np.isfinite(finger_scale) or finger_scale <= 0.0:
+        raise FrankaAsyncPolicyContractError("FastWAM finger_scale must be positive and finite")
+    signs = np.asarray(finger_signs, dtype=np.float64)
+    if signs.shape != (2,) or not np.all(np.isfinite(signs)):
+        raise FrankaAsyncPolicyContractError("FastWAM finger_signs must contain two finite values")
+    try:
+        rotation = rotation_6d_to_matrix(state[3:9])
+        rotation_vector = so3_log(rotation)
+    except ValueError as exc:
+        raise FrankaAsyncPolicyContractError("Could not decode FastWAM anchor rotation") from exc
+    open_value = 1.0 - closed
+    fingers = finger_scale * open_value * signs
+    result = np.concatenate((state[:3], rotation_vector, fingers))
+    if result.shape != (FASTWAM_STATE_DIM,) or not np.all(np.isfinite(result)):
+        raise FrankaAsyncPolicyContractError("Constructed FastWAM state is invalid")
+    return result
+
+
+def _decode_fastwam_absolute_action_chunk(
+    anchor_state: np.ndarray,
+    adjacent_chunk: torch.Tensor,
+) -> torch.Tensor:
+    """Cumulatively integrate adjacent FastWAM deltas into canonical absolute8 actions."""
+
+    state = np.asarray(anchor_state, dtype=np.float64)
+    if state.shape != (STATE_DIM,) or not np.all(np.isfinite(state)):
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM anchor state must be finite shape ({STATE_DIM},), got {state.shape}"
+        )
+    action = torch.as_tensor(adjacent_chunk, device="cpu")
+    if (
+        action.ndim != 2
+        or action.shape[0] <= 0
+        or action.shape[1] != FASTWAM_ACTION_DIM
+        or not action.is_floating_point()
+        or not bool(torch.isfinite(action).all())
+    ):
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM adjacent action must be finite floating [K,{FASTWAM_ACTION_DIM}], "
+            f"got {tuple(action.shape)}"
+        )
+    values = action.to(dtype=torch.float64).numpy()
+    try:
+        position = state[:3].copy()
+        rotation = rotation_6d_to_matrix(state[3:9])
+        positions = np.empty((len(values), 3), dtype=np.float64)
+        rotations = np.empty((len(values), 3, 3), dtype=np.float64)
+        for index, row in enumerate(values):
+            position = position + row[:3]
+            rotation = rotation @ so3_exp(row[3:6])
+            positions[index] = position
+            rotations[index] = rotation
+        quaternion = enforce_quaternion_continuity(matrix_to_quaternion_xyzw(rotations))
+    except ValueError as exc:
+        raise FrankaAsyncPolicyContractError("Failed to integrate FastWAM adjacent actions") from exc
+
+    # The seventh FastWAM dimension is an absolute open target, while the
+    # canonical ROS/client boundary is absolute closed_0_1.
+    gripper_closed = 1.0 - np.clip(values[:, 6:7], 0.0, 1.0)
+    absolute = np.concatenate((positions, quaternion, gripper_closed), axis=-1)
+    if absolute.shape != (len(values), ABSOLUTE_ACTION_DIM) or not np.all(np.isfinite(absolute)):
+        raise FrankaAsyncPolicyContractError("Decoded FastWAM absolute action chunk is invalid")
+    return torch.as_tensor(absolute, dtype=torch.float32, device="cpu")
+
+
+def _load_fastwam_text_context(
+    contract: FrankaFastWAMCheckpointContract,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        payload = torch.load(
+            contract.text_context_path,
+            map_location="cpu",
+            weights_only=True,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError(
+            f"Could not load FastWAM cached text context: {contract.text_context_path}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise FrankaAsyncPolicyContractError("FastWAM text context payload must be a mapping")
+    context_value = payload.get("context")
+    mask_value = payload.get("mask")
+    if not isinstance(context_value, torch.Tensor) or not isinstance(mask_value, torch.Tensor):
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM text context payload must contain context/mask tensors"
+        )
+    if context_value.dtype != torch.bfloat16 or mask_value.dtype != torch.bool:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM text context must use bfloat16 context and bool source mask"
+        )
+    context = context_value.detach().clone().to(device="cpu")
+    source_mask = mask_value.detach().clone().to(device="cpu")
+    expected_context_shape = (contract.context_len, FASTWAM_CONTEXT_WIDTH)
+    if tuple(context.shape) != expected_context_shape or not bool(torch.isfinite(context.float()).all()):
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM context must be finite shape {expected_context_shape}, got {tuple(context.shape)}"
+        )
+    if tuple(source_mask.shape) != (contract.context_len,):
+        raise FrankaAsyncPolicyContractError(
+            f"FastWAM context mask must have shape ({contract.context_len},), "
+            f"got {tuple(source_mask.shape)}"
+        )
+    # RobotVideoDataset zeroed padding tokens but then exposed an all-true mask
+    # during training to match Wan2.2.  Deployment must preserve both details.
+    context[~source_mask] = 0.0
+    return context, torch.ones_like(source_mask)
+
+
+def _load_fastwam_runtime(
+    contract: FrankaFastWAMCheckpointContract,
+    *,
+    device: str,
+) -> _FastWAMRuntime:
+    """Lazily reconstruct FastWAM so PI0-only environments never import its stack."""
+
+    fastwam_repo = contract.run_dir.parents[2]
+    source_roots = (fastwam_repo / "src", fastwam_repo / "franka_project" / "src")
+    if not all(path.is_dir() for path in source_roots):
+        raise FrankaAsyncPolicyContractError(
+            "Could not infer the FastWAM source checkout from the checkpoint run; "
+            "expected <FastWAM>/franka_project/runs/<run>"
+        )
+    for source_root in source_roots:
+        if str(source_root) not in sys.path:
+            sys.path.insert(0, str(source_root))
+    try:
+        fastwam_package = importlib.import_module("fastwam")
+        loaded_source_root = Path(fastwam_package.__file__).resolve().parent
+    except (AttributeError, ImportError, TypeError) as exc:
+        raise FrankaAsyncPolicyContractError("Could not import the approved FastWAM source tree") from exc
+    if loaded_source_root != fastwam_repo / "src" / "fastwam":
+        raise FrankaAsyncPolicyContractError(
+            "Imported FastWAM package does not match the deployment manifest source tree: "
+            f"expected={fastwam_repo / 'src' / 'fastwam'}, actual={loaded_source_root}"
+        )
+
+    model_base = Path(
+        os.environ.setdefault("DIFFSYNTH_MODEL_BASE_PATH", str(fastwam_repo / "checkpoints"))
+    ).expanduser().resolve()
+    if not model_base.is_dir():
+        raise FrankaAsyncPolicyContractError(
+            f"DIFFSYNTH_MODEL_BASE_PATH does not exist: {model_base}"
+        )
+    configured_vae = (model_base / FASTWAM_WAN_VAE_RELATIVE_PATH).resolve()
+    if configured_vae != contract.vae_path:
+        raise FrankaAsyncPolicyContractError(
+            "DIFFSYNTH_MODEL_BASE_PATH changed after FastWAM deployment validation"
+        )
+    try:
+        from hydra.utils import instantiate
+        from omegaconf import OmegaConf
+    except ImportError as exc:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM dependencies are unavailable. Run this backend in a dedicated serving "
+            "environment containing FastWAM, Hydra, OmegaConf, and a compatible CUDA PyTorch."
+        ) from exc
+
+    try:
+        torch_device = torch.device(device)
+    except (TypeError, RuntimeError) as exc:
+        raise FrankaAsyncPolicyContractError(f"Invalid FastWAM policy device: {device!r}") from exc
+    if torch_device.type != "cuda" or not torch.cuda.is_available():
+        raise FrankaAsyncPolicyContractError("FastWAM serving requires an available CUDA device")
+
+    normalizer = _load_fastwam_minmax_normalizer(contract.stats_path)
+    context, context_mask = _load_fastwam_text_context(contract)
+    try:
+        runtime_config = OmegaConf.load(contract.runtime_config_path)
+        model_config = OmegaConf.create(OmegaConf.to_container(runtime_config.model, resolve=True))
+        model_config.skip_dit_load_from_pretrain = True
+        model_config.action_dit_pretrained_path = None
+        model = instantiate(
+            model_config,
+            model_dtype=torch.bfloat16,
+            device=str(torch_device),
+        )
+        payload = torch.load(
+            contract.checkpoint_path,
+            map_location="cpu",
+            weights_only=True,
+            mmap=True,
+        )
+    except Exception as exc:
+        raise FrankaAsyncPolicyContractError(
+            f"Could not reconstruct FastWAM from {contract.runtime_config_path}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise FrankaAsyncPolicyContractError("FastWAM checkpoint root must be a mapping")
+    if payload.get("step") != contract.checkpoint_step:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM checkpoint filename and embedded step disagree: "
+            f"filename={contract.checkpoint_step}, embedded={payload.get('step')!r}"
+        )
+    expected_saved_dtype = {"bf16": "torch.bfloat16"}[contract.model_dtype]
+    if payload.get("torch_dtype") != expected_saved_dtype:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM checkpoint/runtime dtype mismatch: "
+            f"runtime={contract.model_dtype!r}, checkpoint={payload.get('torch_dtype')!r}"
+        )
+    mot = payload.get("mot")
+    proprio = payload.get("proprio_encoder")
+    if not isinstance(mot, Mapping) or not isinstance(proprio, Mapping):
+        raise FrankaAsyncPolicyContractError("FastWAM checkpoint lacks mot/proprio_encoder mappings")
+    try:
+        model.mot.load_state_dict(mot, strict=True)
+        model.proprio_encoder.load_state_dict(proprio, strict=True)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError("FastWAM checkpoint strict tensor load failed") from exc
+    del payload
+    gc.collect()
+    model.eval()
+    model.requires_grad_(False)
+    if bool(getattr(model, "training", True)):
+        raise FrankaAsyncPolicyContractError("FastWAM model remained in training mode after eval()")
+    if int(getattr(model, "proprio_dim", -1)) != FASTWAM_STATE_DIM:
+        raise FrankaAsyncPolicyContractError("Loaded FastWAM model proprio dimension mismatch")
+    if int(getattr(getattr(model, "action_expert", None), "action_dim", -1)) != FASTWAM_ACTION_DIM:
+        raise FrankaAsyncPolicyContractError("Loaded FastWAM model action dimension mismatch")
+    return _FastWAMRuntime(
+        model=model,
+        normalizer=normalizer,
+        context=context,
+        context_mask=context_mask,
+    )
+
+
+def _reject_remote_policy_conflicts(
+    server_config: PolicyServerConfig,
+    client_specs: RemotePolicyConfig,
+    *,
+    expected_policy_type: str,
+) -> None:
+    # Inspect the instance state, not dataclass class defaults: when an older
+    # pickle is decoded by newer code, a newly added default can otherwise make
+    # the obsolete payload look current.
+    client_state = vars(client_specs)
+    protocol_version = client_state.get("protocol_version")
+    if protocol_version != ASYNC_INFERENCE_PROTOCOL_VERSION:
+        raise FrankaAsyncPolicyContractError(
+            "Franka client/server async protocol mismatch: "
+            f"server={ASYNC_INFERENCE_PROTOCOL_VERSION}, client={protocol_version!r}; "
+            "synchronize both checkouts before deployment"
+        )
+    client_fps = client_state.get("fps")
+    if client_fps != server_config.fps:
+        raise FrankaAsyncPolicyContractError(
+            "Franka client/server fps mismatch: "
+            f"server={server_config.fps}, client={client_fps!r}"
+        )
+    if client_specs.policy_type is not None and client_specs.policy_type != expected_policy_type:
+        raise FrankaAsyncPolicyContractError(
+            "Franka client/server policy_type mismatch: "
+            f"server={expected_policy_type!r}, client={client_specs.policy_type!r}"
+        )
+    if (
+        server_config.actions_per_chunk is not None
+        and client_specs.actions_per_chunk is not None
+        and client_specs.actions_per_chunk != server_config.actions_per_chunk
+    ):
+        raise FrankaAsyncPolicyContractError(
+            "Franka client/server actions_per_chunk mismatch: "
+            f"server={server_config.actions_per_chunk}, client={client_specs.actions_per_chunk}"
+        )
+
+
+def _validate_franka_remote_policy_specs(
+    policy_specs: RemotePolicyConfig,
+    *,
+    expected_policy_type: str,
+    expected_rename_map: Mapping[str, str],
+) -> None:
+    if policy_specs.policy_type != expected_policy_type:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka {expected_policy_type} server resolved unexpected policy_type "
+            f"{policy_specs.policy_type!r}"
+        )
+    features = policy_specs.lerobot_features
+    expected_keys = {OBS_STATE, *FRANKA_CAMERA_KEYS}
+    if set(features) != expected_keys:
+        raise FrankaAsyncPolicyContractError(
+            "Franka client observation feature keys do not match the frozen contract: "
+            f"expected={sorted(expected_keys)}, actual={sorted(features)}"
+        )
+
+    state_feature = features[OBS_STATE]
+    expected_state = {
+        "dtype": "float32",
+        "shape": (STATE_DIM,),
+        "names": list(FRANKA_STATE_NAMES),
+    }
+    actual_state = {
+        "dtype": state_feature.get("dtype"),
+        "shape": tuple(state_feature.get("shape", ())),
+        "names": state_feature.get("names"),
+    }
+    if actual_state != expected_state:
+        raise FrankaAsyncPolicyContractError(
+            "Franka client state feature does not match the frozen name/order contract: "
+            f"expected={expected_state}, actual={actual_state}"
+        )
+
+    for camera_key in FRANKA_CAMERA_KEYS:
+        camera_feature = features[camera_key]
+        expected_camera = {
+            "dtype": "image",
+            "shape": FRANKA_CAMERA_SHAPE,
+            "names": ["height", "width", "channels"],
+        }
+        actual_camera = {
+            "dtype": camera_feature.get("dtype"),
+            "shape": tuple(camera_feature.get("shape", ())),
+            "names": camera_feature.get("names"),
+        }
+        if actual_camera != expected_camera:
+            raise FrankaAsyncPolicyContractError(
+                f"Franka client camera feature {camera_key!r} does not match the frozen contract: "
+                f"expected={expected_camera}, actual={actual_camera}"
+            )
+
+    expected_map = dict(expected_rename_map)
+    if policy_specs.rename_map != expected_map:
+        raise FrankaAsyncPolicyContractError(
+            f"Franka client rename_map mismatch for {expected_policy_type}: "
+            f"expected={expected_map}, actual={policy_specs.rename_map}"
+        )
+
+
 class FrankaPI0PolicyServer(PolicyServer):
     """LeRobot async server with strict Franka PI0 preprocessing, load, and output adapters."""
 
     prefix = "franka_pi0_policy_server"
 
     def _resolve_policy_specs(self, client_specs: RemotePolicyConfig) -> RemotePolicyConfig:
+        _reject_remote_policy_conflicts(
+            self.config,
+            client_specs,
+            expected_policy_type="pi0",
+        )
         policy_specs = super()._resolve_policy_specs(client_specs)
-        features = policy_specs.lerobot_features
-        expected_keys = {OBS_STATE, *FRANKA_CAMERA_KEYS}
-        if set(features) != expected_keys:
-            raise FrankaAsyncPolicyContractError(
-                "Franka client observation feature keys do not match the frozen contract: "
-                f"expected={sorted(expected_keys)}, actual={sorted(features)}"
-            )
-
-        state_feature = features[OBS_STATE]
-        expected_state = {
-            "dtype": "float32",
-            "shape": (STATE_DIM,),
-            "names": list(FRANKA_STATE_NAMES),
-        }
-        actual_state = {
-            "dtype": state_feature.get("dtype"),
-            "shape": tuple(state_feature.get("shape", ())),
-            "names": state_feature.get("names"),
-        }
-        if actual_state != expected_state:
-            raise FrankaAsyncPolicyContractError(
-                "Franka client state feature does not match the frozen name/order contract: "
-                f"expected={expected_state}, actual={actual_state}"
-            )
-
-        for camera_key in FRANKA_CAMERA_KEYS:
-            camera_feature = features[camera_key]
-            expected_camera = {
-                "dtype": "image",
-                "shape": FRANKA_CAMERA_SHAPE,
-                "names": ["height", "width", "channels"],
-            }
-            actual_camera = {
-                "dtype": camera_feature.get("dtype"),
-                "shape": tuple(camera_feature.get("shape", ())),
-                "names": camera_feature.get("names"),
-            }
-            if actual_camera != expected_camera:
-                raise FrankaAsyncPolicyContractError(
-                    f"Franka client camera feature {camera_key!r} does not match the frozen contract: "
-                    f"expected={expected_camera}, actual={actual_camera}"
-                )
-
-        if policy_specs.rename_map != FRANKA_RENAME_MAP:
-            raise FrankaAsyncPolicyContractError(
-                "Franka client rename_map does not match the frozen two-camera PI0 mapping: "
-                f"expected={FRANKA_RENAME_MAP}, actual={policy_specs.rename_map}"
-            )
+        _validate_franka_remote_policy_specs(
+            policy_specs,
+            expected_policy_type="pi0",
+            expected_rename_map=FRANKA_PI0_RENAME_MAP,
+        )
         return policy_specs
 
-    def _load_policy(self, policy_type: str, pretrained_name_or_path: str) -> PI0Policy:
+    def _load_policy(self, policy_type: str, pretrained_name_or_path: str) -> Any:
         if policy_type != "pi0":
             raise FrankaAsyncPolicyContractError(
                 f"Franka async server only accepts policy_type='pi0', got {policy_type!r}"
@@ -665,6 +1642,17 @@ class FrankaPI0PolicyServer(PolicyServer):
             expected_fps=self.config.fps,
             expected_actions_per_chunk=self.actions_per_chunk,
         )
+        # Keep PI0 imports out of FastWAM-only processes.  The two policy
+        # stacks intentionally use different Transformer/Hugging Face
+        # dependency generations.
+        from lerobot.policies.pi0.modeling_pi0 import PI0Policy
+
+        from .pi0_training import (
+            build_pi0_full_finetune_config,
+            canonicalize_pi0_full_training_graph,
+            load_pi0_full_checkpoint_weights,
+        )
+
         config = build_pi0_full_finetune_config(checkpoint_dir, device=self.device)
         policy = PI0Policy(config)
         canonicalize_pi0_full_training_graph(policy)
@@ -720,6 +1708,9 @@ class FrankaPI0PolicyServer(PolicyServer):
         """
         if self.lerobot_features is None:
             raise FrankaAsyncPolicyContractError("LeRobot observation features are unset")
+
+        # See _load_policy(): FastWAM serving must not import PI0's model stack.
+        from lerobot.policies.pi0.modeling_pi0 import resize_with_pad_torch
 
         raw_observation = observation_t.get_observation()
         contract = getattr(self, "_checkpoint_contract", None)
@@ -823,16 +1814,221 @@ class FrankaPI0PolicyServer(PolicyServer):
         return timed_actions
 
 
+class FrankaFastWAMPolicyServer(PolicyServer):
+    """LeRobot async transport with the frozen native-EEF FastWAM runtime contract."""
+
+    prefix = "franka_fastwam_policy_server"
+
+    def __init__(self, config: PolicyServerConfig):
+        super().__init__(config)
+        self._fastwam_runtime: _FastWAMRuntime | None = None
+        self._checkpoint_contract: FrankaFastWAMCheckpointContract | None = None
+
+    def _resolve_policy_specs(self, client_specs: RemotePolicyConfig) -> RemotePolicyConfig:
+        _reject_remote_policy_conflicts(
+            self.config,
+            client_specs,
+            expected_policy_type="fastwam",
+        )
+        policy_specs = super()._resolve_policy_specs(client_specs)
+        _validate_franka_remote_policy_specs(
+            policy_specs,
+            expected_policy_type="fastwam",
+            expected_rename_map=FRANKA_FASTWAM_RENAME_MAP,
+        )
+        return policy_specs
+
+    def _load_policy(self, policy_type: str, pretrained_name_or_path: str) -> Any:
+        if policy_type != "fastwam":
+            raise FrankaAsyncPolicyContractError(
+                f"Franka FastWAM server only accepts policy_type='fastwam', got {policy_type!r}"
+            )
+        if self.device is None:
+            raise FrankaAsyncPolicyContractError("Policy device is unset before FastWAM checkpoint load")
+        if self.actions_per_chunk is None or self.actions_per_chunk <= 0:
+            raise FrankaAsyncPolicyContractError("actions_per_chunk is unset before FastWAM checkpoint load")
+        contract = inspect_fastwam_checkpoint_contract(
+            pretrained_name_or_path,
+            expected_fps=self.config.fps,
+            expected_actions_per_chunk=self.actions_per_chunk,
+        )
+        runtime = _load_fastwam_runtime(contract, device=self.device)
+        self._checkpoint_contract = contract
+        self._fastwam_runtime = runtime
+        self.logger.info(
+            "Strictly loaded Franka FastWAM checkpoint from %s | task=%r fps=%s chunk_size=%s step=%s",
+            contract.checkpoint_path,
+            contract.task_instruction,
+            contract.observation_fps,
+            contract.chunk_size,
+            contract.checkpoint_step,
+        )
+        return runtime.model
+
+    def SendPolicyInstructions(self, request, context):  # noqa: N802
+        """Set up FastWAM without invoking LeRobot's policy registry/processors."""
+
+        if not self.running:
+            self.logger.warning("Server is not running. Ignoring policy instructions.")
+            return services_pb2.PolicySetupAck()
+        client_specs = pickle.loads(request.data)  # nosec B301 - trusted internal transport boundary
+        if not isinstance(client_specs, RemotePolicyConfig):
+            raise TypeError(f"Policy specs must be a RemotePolicyConfig. Got {type(client_specs)}")
+        policy_specs = self._resolve_policy_specs(client_specs)
+        client_id = context.peer()
+        self.logger.info(
+            "Receiving FastWAM policy instructions from %s | checkpoint=%s | actions=%s | device=%s",
+            client_id,
+            policy_specs.pretrained_name_or_path,
+            policy_specs.actions_per_chunk,
+            policy_specs.device,
+        )
+
+        with self._policy_setup_lock:
+            self.device = policy_specs.device
+            self.policy_type = policy_specs.policy_type
+            self.lerobot_features = policy_specs.lerobot_features
+            self.actions_per_chunk = policy_specs.actions_per_chunk
+            self.rename_map = policy_specs.rename_map
+            policy_setup_key = self._make_policy_setup_key(policy_specs)
+            if (
+                self._loaded_policy_setup_key == policy_setup_key
+                and self.policy is not None
+                and self._fastwam_runtime is not None
+            ):
+                self.logger.info("FastWAM setup unchanged; reusing the loaded runtime.")
+                return self._make_policy_setup_ack(policy_specs)
+            start = time.perf_counter()
+            self.policy = self._load_policy(
+                self.policy_type,
+                policy_specs.pretrained_name_or_path,
+            )
+            self._loaded_policy_setup_key = policy_setup_key
+            elapsed = time.perf_counter() - start
+        self.logger.info("Time taken to load FastWAM on %s: %.4f seconds", self.device, elapsed)
+        return self._make_policy_setup_ack(policy_specs)
+
+    def _reconstruct_fastwam_observation(
+        self,
+        observation_t: TimedObservation,
+    ) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
+        if self.lerobot_features is None:
+            raise FrankaAsyncPolicyContractError("LeRobot observation features are unset")
+        contract = self._checkpoint_contract
+        if contract is None:
+            raise FrankaAsyncPolicyContractError("FastWAM checkpoint contract is unset")
+        raw_observation = observation_t.get_observation()
+        task = raw_observation.get("task")
+        if not isinstance(task, str) or task != contract.task_instruction:
+            raise FrankaAsyncPolicyContractError(
+                "Franka observation task does not match the FastWAM checkpoint: "
+                f"expected={contract.task_instruction!r}, actual={task!r}"
+            )
+        try:
+            observation = make_lerobot_observation(raw_observation, self.lerobot_features)
+            state = np.asarray(observation[OBS_STATE], dtype=np.float64)
+            camera1 = np.asarray(observation[FRANKA_CAMERA_KEYS[0]])
+            camera2 = np.asarray(observation[FRANKA_CAMERA_KEYS[1]])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise FrankaAsyncPolicyContractError(
+                "Could not reconstruct the FastWAM observation from the client payload"
+            ) from exc
+        fastwam_state = _build_fastwam_state(
+            state,
+            finger_scale=contract.finger_scale,
+            finger_signs=contract.finger_signs,
+        )
+        input_image = _prepare_fastwam_image(
+            camera1,
+            camera2,
+            target_height=contract.image_height,
+            target_width=contract.image_width,
+        )
+        return state, fastwam_state, input_image
+
+    def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
+        runtime = self._fastwam_runtime
+        contract = self._checkpoint_contract
+        if runtime is None or contract is None or self.policy is None:
+            raise FrankaAsyncPolicyContractError("FastWAM runtime is not initialized")
+        if self.actions_per_chunk != contract.chunk_size:
+            raise FrankaAsyncPolicyContractError(
+                "FastWAM runtime chunk size drift: "
+                f"server={self.actions_per_chunk}, checkpoint={contract.chunk_size}"
+            )
+        anchor_state, fastwam_state, input_image = self._reconstruct_fastwam_observation(observation_t)
+        normalized_state = runtime.normalizer.normalize_state(
+            torch.from_numpy(fastwam_state).to(dtype=torch.float32)
+        )
+        with torch.inference_mode():
+            output = self.policy.infer_action(
+                prompt=None,
+                input_image=input_image,
+                action_horizon=contract.chunk_size,
+                proprio=normalized_state,
+                context=runtime.context,
+                context_mask=runtime.context_mask,
+                text_cfg_scale=1.0,
+                num_inference_steps=contract.num_inference_steps,
+                sigma_shift=None,
+                seed=contract.seed,
+                rand_device="cpu",
+                tiled=False,
+            )
+        if not isinstance(output, Mapping) or not isinstance(output.get("action"), torch.Tensor):
+            raise FrankaAsyncPolicyContractError("FastWAM infer_action returned no tensor action")
+        normalized_action = output["action"].detach().to(device="cpu", dtype=torch.float32)
+        expected_shape = (contract.chunk_size, FASTWAM_ACTION_DIM)
+        if tuple(normalized_action.shape) != expected_shape:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM normalized action must have shape {expected_shape}, "
+                f"got {tuple(normalized_action.shape)}"
+            )
+        adjacent_action = runtime.normalizer.denormalize_action(normalized_action)
+        absolute_action = _decode_fastwam_absolute_action_chunk(anchor_state, adjacent_action)
+        return self._time_action_chunk(
+            observation_t.get_timestamp(),
+            list(absolute_action),
+            observation_t.get_timestep(),
+        )
+
+
+FRANKA_POLICY_SERVER_TYPES: dict[str, type[PolicyServer]] = {
+    "pi0": FrankaPI0PolicyServer,
+    "fastwam": FrankaFastWAMPolicyServer,
+}
+
+
+def create_franka_policy_server(config: PolicyServerConfig) -> PolicyServer:
+    """Create the configured Franka backend before registering the gRPC servicer."""
+
+    try:
+        server_type = FRANKA_POLICY_SERVER_TYPES[config.policy_type]
+    except KeyError as exc:
+        raise ValueError(
+            f"Franka policy_type must be one of {FRANKA_POLICY_TYPES}, got {config.policy_type!r}"
+        ) from exc
+    return server_type(config)
+
+
 __all__ = [
     "ABSOLUTE_ACTION_DIM",
     "FRANKA_CAMERA_KEYS",
     "FRANKA_CAMERA_SHAPE",
     "FRANKA_CHECKPOINT_TYPE",
+    "FRANKA_FASTWAM_RENAME_MAP",
+    "FRANKA_PI0_RENAME_MAP",
+    "FRANKA_POLICY_TYPES",
     "FRANKA_RENAME_MAP",
     "FRANKA_STATE_NAMES",
     "FrankaAsyncPolicyContractError",
     "FrankaCheckpointContract",
+    "FrankaFastWAMCheckpointContract",
+    "FrankaFastWAMPolicyServer",
     "FrankaPI0PolicyServer",
+    "FrankaServingContract",
+    "create_franka_policy_server",
+    "inspect_fastwam_checkpoint_contract",
     "inspect_franka_checkpoint_contract",
     "validate_franka_checkpoint",
     "validate_franka_server_config",

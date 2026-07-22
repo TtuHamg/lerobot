@@ -38,6 +38,12 @@ ABSOLUTE_ACTION_NAMES = (
 CAMERA_NAMES = ("camera1", "camera2")
 CAMERA_SHAPE = (480, 640, 3)
 FIXTURE_KEYS = frozenset(("state", *CAMERA_NAMES))
+FRANKA_POLICY_TYPES = ("pi0", "fastwam")
+PI0_RENAME_MAP = {
+    "observation.images.camera1": "observation.images.base_0_rgb",
+    "observation.images.camera2": "observation.images.left_wrist_0_rgb",
+}
+FASTWAM_RENAME_MAP: dict[str, str] = {}
 
 
 @dataclass(frozen=True, slots=True)
