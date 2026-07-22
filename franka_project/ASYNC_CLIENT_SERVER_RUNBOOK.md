@@ -131,15 +131,17 @@ CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
 Launcher 会从所选 checkpoint 的 `config.json`、geometry manifest 和 stats manifest 推导
 task、profile、FPS 与 chunk size，并 fail-fast 检查它们和 CLI 输入一致；不再写死 15 Hz 或
 50-step chunk。上面是杯子 checkpoint 的 15 Hz 示例；薯片 native30 checkpoint 应把 server
-和 client 的 `--fps` 都改为 `30`。完整文件 hash 校验和模型加载在第一次 client 握手时执行。
+和 client 的 `--fps` 都改为 `30`。第一次 client 握手会校验小型 metadata 并 strict-load
+模型 tensor，但不会重新计算多 GB `model.safetensors` 的完整 SHA-256，也不会完整比较 manifest
+中的 `training_graph` 报告。
 
 ### 2.2 FastWAM move-cups checkpoint
 
 当前批准的 FastWAM artifact 被
 [`manifests/fastwam_move_cups_step_019650.json`](./manifests/fastwam_move_cups_step_019650.json)
 锁定。server 启动时会校验 checkpoint、runtime YAML、dataset contract、训练统计、文本
-embedding、Wan VAE、FastWAM Python source tree 和 pyproject 的 size/SHA-256；同名但内容不同的
-文件会被拒绝。
+embedding、Wan VAE、FastWAM Python source tree 和 pyproject。12 GB checkpoint 与 Wan VAE
+只检查路径、存在性和 size；小型 metadata/source 文件仍检查 SHA-256。
 
 现有 `lerobot` conda 环境缺少 Hydra/OmegaConf/FastWAM runtime，现有 `fastwam` 环境则是
 Python 3.10，低于本仓库要求的 Python 3.12。真实模型启动前必须先准备并验证一个 Python

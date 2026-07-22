@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import franka_eef_pipeline.async_server as async_server_module
 import numpy as np
 import pytest
 import torch
@@ -55,6 +54,8 @@ def _write_checkpoint_envelope(
     stats_rollout: object = False,
     stats_profile: str | None = None,
     stats_fps: int | None = None,
+    manifest_schema_version: int = 1,
+    checkpoint_type: str = FRANKA_CHECKPOINT_TYPE,
 ) -> Path:
     dataset_profile = {
         "schema_version": 1,
@@ -148,8 +149,8 @@ def _write_checkpoint_envelope(
     (root / "postprocessor_state.safetensors").write_bytes(b"post")
 
     manifest = {
-        "schema_version": 1,
-        "checkpoint_type": FRANKA_CHECKPOINT_TYPE,
+        "schema_version": manifest_schema_version,
+        "checkpoint_type": checkpoint_type,
         "weights_namespace": PI0_CORE_WEIGHTS_NAMESPACE,
         "hub_upload": False,
         "wandb_artifact_upload": False,
@@ -363,6 +364,27 @@ def test_checkpoint_preflight_uses_checkpoint_contract(
 
 
 @pytest.mark.parametrize(
+    ("schema_version", "checkpoint_type"),
+    [
+        (1, FRANKA_CHECKPOINT_TYPE),
+        (2, "franka_pi0_configurable_parameter_eef"),
+    ],
+)
+def test_checkpoint_preflight_accepts_schema1_and_schema2_headers(
+    tmp_path: Path,
+    schema_version: int,
+    checkpoint_type: str,
+):
+    checkpoint = _write_checkpoint_envelope(
+        tmp_path,
+        manifest_schema_version=schema_version,
+        checkpoint_type=checkpoint_type,
+    )
+
+    assert validate_franka_checkpoint(checkpoint) == checkpoint.resolve()
+
+
+@pytest.mark.parametrize(
     ("expected_fps", "expected_chunk", "message"),
     [(15, 50, "fps mismatch"), (30, 49, "actions_per_chunk mismatch")],
 )
@@ -471,15 +493,28 @@ def test_server_config_uses_selected_checkpoint_timing(
     assert contract.chunk_size == chunk_size
 
 
-def test_checkpoint_preflight_rejects_non_franka_manifest(tmp_path: Path):
+def test_checkpoint_preflight_does_not_gate_on_outer_manifest_header(tmp_path: Path):
     checkpoint = _write_checkpoint_envelope(tmp_path)
     manifest_path = checkpoint / "franka_pi0_checkpoint_manifest.json"
     manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = 99
     manifest["checkpoint_type"] = "generic_pi0"
+    manifest["weights_namespace"] = "experimental"
+    manifest["hub_upload"] = True
+    manifest["wandb_artifact_upload"] = True
     manifest_path.write_text(json.dumps(manifest))
 
-    with pytest.raises(FrankaAsyncPolicyContractError, match="contract mismatch"):
-        validate_franka_checkpoint(checkpoint)
+    assert validate_franka_checkpoint(checkpoint) == checkpoint.resolve()
+
+
+def test_checkpoint_preflight_does_not_hash_model_weights(tmp_path: Path):
+    checkpoint = _write_checkpoint_envelope(tmp_path)
+    model_path = checkpoint / "model.safetensors"
+    payload = bytearray(model_path.read_bytes())
+    payload[0] ^= 0xFF
+    model_path.write_bytes(payload)
+
+    assert validate_franka_checkpoint(checkpoint) == checkpoint.resolve()
 
 
 def test_checkpoint_preflight_rejects_same_size_content_corruption(tmp_path: Path):
@@ -496,6 +531,7 @@ def test_checkpoint_preflight_rejects_same_size_content_corruption(tmp_path: Pat
 
 def test_strict_load_uses_project_loader_and_sets_eval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import franka_eef_pipeline.pi0_training as pi0_training_module
+
     import lerobot.policies.pi0.modeling_pi0 as pi0_modeling_module
 
     checkpoint = _write_checkpoint_envelope(tmp_path)

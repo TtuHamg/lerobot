@@ -24,15 +24,13 @@ from typing import Any
 
 import torch
 from safetensors import safe_open
-from safetensors.torch import load_model as load_safetensors_model
-from safetensors.torch import save_model as save_safetensors_model
+from safetensors.torch import load_model as load_safetensors_model, save_model as save_safetensors_model
 
 from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi0.modeling_pi0 import PI0Policy
 from lerobot.policies.pi0.processor_pi0 import make_pi0_pre_post_processors
 from lerobot.utils.constants import ACTION, OBS_STATE
-
 
 CANONICAL_PI0_IMAGE_KEYS = (
     "observation.images.base_0_rgb",
@@ -701,18 +699,6 @@ def load_pi0_full_checkpoint_weights(
     if checkpoint_manifest_path.is_file():
         with checkpoint_manifest_path.open(encoding="utf-8") as stream:
             checkpoint_manifest = json.load(stream)
-        manifest_namespace = checkpoint_manifest.get("weights_namespace")
-        if manifest_namespace != PI0_CORE_WEIGHTS_NAMESPACE:
-            raise PI0CheckpointLoadError(
-                "Project checkpoint manifest has an incompatible weights namespace: "
-                f"expected={PI0_CORE_WEIGHTS_NAMESPACE!r}, got={manifest_namespace!r}"
-            )
-        manifest_training_graph = checkpoint_manifest.get("training_graph")
-        if manifest_training_graph != training_graph_report:
-            raise PI0CheckpointLoadError(
-                "Project checkpoint manifest training_graph does not match the live canonical PI0 graph: "
-                f"expected={training_graph_report}, got={manifest_training_graph}"
-            )
 
     weights_report = _strict_load_and_verify_weights(policy, weights_path)
     parameter_report = assert_full_parameter_training(policy)

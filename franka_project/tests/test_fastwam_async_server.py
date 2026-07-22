@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import json
 import pickle  # nosec: exercises the trusted internal async setup protocol
 from pathlib import Path
 from types import SimpleNamespace
 
+import franka_eef_pipeline.async_server as async_server_module
 import numpy as np
 import pytest
 import torch
-
-import franka_eef_pipeline.async_server as async_server_module
 from franka_eef_pipeline.async_server import (
     FRANKA_CAMERA_KEYS,
     FRANKA_CAMERA_SHAPE,
@@ -24,6 +24,7 @@ from franka_eef_pipeline.async_server import (
     _FastWAMMinMaxNormalizer,
     _FastWAMRuntime,
     _prepare_fastwam_image,
+    _verify_fastwam_deployment_manifest,
     create_franka_policy_server,
     validate_franka_server_config,
 )
@@ -106,6 +107,65 @@ def test_server_config_dispatches_to_fastwam_inspector(monkeypatch) -> None:
 
     assert validate_franka_server_config(config) is sentinel
     assert calls == [("checkpoint.pt", 30, 32)]
+
+
+def test_fastwam_manifest_skips_large_weight_hashes(tmp_path: Path, monkeypatch) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    files = {
+        "checkpoint": run_dir / "checkpoint.pt",
+        "wan_vae": tmp_path / "vae.safetensors",
+        "runtime_config": run_dir / "runtime.yaml",
+    }
+    for path in files.values():
+        path.write_bytes(b"content")
+    manifest_path = tmp_path / "deployment.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 99,
+                "policy_type": "fastwam",
+                "run_name": "run",
+                "checkpoint_step": 1,
+                "task_instruction": "move the cup",
+                "files": {
+                    role: {
+                        "path_suffix": path.name,
+                        "size_bytes": path.stat().st_size,
+                        "sha256": "a" * 64,
+                    }
+                    for role, path in files.items()
+                },
+                "fastwam_source_tree": {
+                    "path_suffix": "src",
+                    "python_file_count": 0,
+                    "sha256": "b" * 64,
+                },
+            }
+        )
+    )
+    hashed_paths = []
+    monkeypatch.setattr(
+        async_server_module,
+        "_sha256_file",
+        lambda path: hashed_paths.append(path) or "a" * 64,
+    )
+    monkeypatch.setattr(
+        async_server_module,
+        "_sha256_python_tree",
+        lambda _root: (0, "b" * 64),
+    )
+
+    _verify_fastwam_deployment_manifest(
+        manifest_path,
+        run_dir=run_dir,
+        checkpoint_step=1,
+        task_instruction="move the cup",
+        files=files,
+        source_root=tmp_path / "src",
+    )
+
+    assert hashed_paths == [files["runtime_config"]]
 
 
 def test_fastwam_policy_specs_require_policy_specific_empty_rename_map() -> None:

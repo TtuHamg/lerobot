@@ -1,0 +1,335 @@
+# PI0 / FastWAM 异步部署启动指南
+
+本文给出当前 Franka ROS2 client 与 policy server 的启动命令，覆盖三种 artifact：
+
+1. PI0 schema 1，全参数 checkpoint；
+2. PI0 schema 2，可配置训练组件 checkpoint；
+3. FastWAM deployment schema 1 checkpoint。
+
+当前代码以提交 `0d11d0352fb03d1e360d1a7732902e0f07663c52` 的功能树为基线，并使用
+async protocol v2。PI0 schema 只作为 checkpoint provenance 保存，两种 schema 使用同一加载
+路径；client 和 server 都不需要 `--schema` 参数。
+
+## 1. 支持矩阵
+
+| Policy artifact | manifest header | server `--policy_type` | FPS | chunk | checkpoint 参数 |
+|---|---|---|---:|---:|---|
+| PI0 chips | `schema_version=1`, `checkpoint_type=franka_pi0_full_parameter_eef` | `pi0` | 30 | 50 | `pretrained_model/` 目录 |
+| PI0 move-cups | `schema_version=2`, `checkpoint_type=franka_pi0_configurable_parameter_eef` | `pi0` | 30 | 50 | `pretrained_model/` 目录 |
+| FastWAM move-cups | `schema_version=1`, `policy_type=fastwam` | `fastwam` | 30 | 32 | `step_019650.pt` 文件 |
+
+PI0 server 不再根据外层 `schema_version/checkpoint_type` 拒绝 checkpoint，也不审计
+`parameter_training` 的组件计数、冻结状态或 signature。schema 1 和 schema 2 都直接进入原有
+canonical PI0 权重加载流程。启动时不会计算 PI0 大权重文件的完整 SHA-256，也不会把 manifest
+中的 `training_graph` 与运行时报告做完整字典比较；必要文件、小型 metadata hash、processor、
+stats、geometry 和 strict tensor key/shape/load 检查仍保留。
+
+注意三个不同层级不要混淆：PI0 schema 2 checkpoint 的外层
+`schema_version` 是 `2`，其中 `parameter_training.schema_version` 是 `1`，
+`training_graph.schema_version` 是 `2`。不要对 manifest 全局替换 `schema_version`。
+
+FastWAM 的 deployment schema 1 是另一种 manifest，不等同于 PI0 schema 1。
+它同样只作为 provenance 保存；server 不因 FastWAM 外层 `schema_version` 不同而拒绝加载，
+但仍核对 `policy_type`、run、checkpoint step 和 task。
+
+## 2. 启动前共同检查
+
+### 2.1 确认两端都是 protocol v2
+
+server 和 client 各自使用实际启动它们的 Python 执行：
+
+```bash
+python -c 'import lerobot; from lerobot.async_inference.helpers import ASYNC_INFERENCE_PROTOCOL_VERSION as v; print(lerobot.__file__); print(v)'
+```
+
+两端最后一行都必须是：
+
+```text
+2
+```
+
+client 侧再检查 ROS 插件来自预期 checkout：
+
+```bash
+python -c 'import lerobot_robot_franka_ros as p; print(p.__file__)'
+```
+
+更新代码后必须重启旧 server/client 进程，并在 client checkout 重新安装 editable 插件：
+
+```bash
+cd /home/pnp/Projects/lerobot
+python -m pip install --no-deps -e franka_project/ros_lerobot
+```
+
+只比较 `git rev-parse HEAD` 不足以证明运行时代码一致：dirty worktree、旧 editable install 或
+另一个 Python 环境都可能让进程加载旧模块。若看到
+`server=2, client=None`，说明 client 实际仍在发送旧协议。
+
+protocol v2 会通过 `PolicySetupAck` 双向核对 protocol、FPS、policy type 和 chunk size。
+
+### 2.2 网络地址
+
+本文按当前 tunnel 拓扑书写：
+
+```text
+server process: 127.0.0.1:15173
+robot client:   127.0.0.1:8080 -> WebSocket tunnel -> server:15173
+```
+
+如果 client 与 server 同机且不经过 tunnel，把 client 的
+`--server_address=127.0.0.1:8080` 改成 `--server_address=127.0.0.1:15173`。
+
+WebSocket/KML tunnel 的启动和 SSO 说明见
+[`ASYNC_CLIENT_SERVER_RUNBOOK.md`](./ASYNC_CLIENT_SERVER_RUNBOOK.md)。
+
+### 2.3 ROS observation 契约
+
+```text
+base frame:       base
+camera1:          /camera1/camera1/color/image_raw
+camera2:          /camera2/camera2/color/image_raw
+EEF pose:         /franka_robot_state_broadcaster/current_pose
+arm qpos:         /franka/joint_states
+gripper:          /gripper/joint_states
+gripper joint:    robotiq_85_left_knuckle_joint
+isolated output:  /lerobot/franka/action_chunk
+```
+
+EEF `PoseStamped.header.frame_id` 必须已经是 `base`；当前 client 不做 TF。两份 PI0 数据转换
+配置都使用 gripper raw endpoints `open=0.0, closed=0.8`，因此下面的 PI0 client 也保持该标定。
+FastWAM 还会强制检查 topic、joint name、gripper endpoints 和时间 skew。
+
+## 3. PI0 schema 1：chips full-parameter checkpoint
+
+固定契约：
+
+```text
+task:  pick up the potato chip
+fps:   30
+chunk: 50
+```
+
+### 3.1 Server
+
+```bash
+cd /m2v_intern/tujiahang/Projects/lerobot
+
+export PI0_SCHEMA1_CHECKPOINT=/m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_chips_obs30_act30_k50_v1/20260717T041129Z_pi0_full_eef_chips_f0_obs30_act30_k50_46pass_255fea1e/checkpoints/step-036150/pretrained_model
+
+CUDA_VISIBLE_DEVICES=0 python franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=pi0 \
+  --pretrained_name_or_path="$PI0_SCHEMA1_CHECKPOINT" \
+  --actions_per_chunk=50 \
+  --policy_device=cuda
+```
+
+### 3.2 Client
+
+```bash
+cd /home/pnp/Projects/lerobot
+
+python -m lerobot_robot_franka_ros.ros2_client \
+  --server_address=127.0.0.1:8080 \
+  --robot.type=franka_ros \
+  --robot.id=franka_pi0_schema1 \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
+  --robot.gripper_open_position=0.0 \
+  --robot.gripper_closed_position=0.8 \
+  --task='pick up the potato chip' \
+  --policy_type=pi0 \
+  --pretrained_name_or_path=server-owned \
+  --policy_device=cpu \
+  --client_device=cpu \
+  --actions_per_chunk=50 \
+  --action_offset=1 \
+  --fps=30 \
+  --chunk_size_threshold=0.5 \
+  --aggregate_fn_name=latest_only \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=10 \
+  '--rename_map={"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}'
+```
+
+## 4. PI0 schema 2：move-cups configurable-parameter checkpoint
+
+固定契约：
+
+```text
+task:  move the paper cup from one end of the can to the other.
+fps:   30
+chunk: 50
+```
+
+schema 2 与 schema 1 使用相同的 PI0 CLI；差别只在 checkpoint manifest 记录的训练 provenance。
+
+### 4.1 Server
+
+```bash
+cd /m2v_intern/tujiahang/Projects/lerobot
+
+export PI0_SCHEMA2_CHECKPOINT=/m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_ActTrans_PaliGemma_eef_move_cups_obs30_act30_k50_v1/20260721T102652Z_pi0_ActTrans_PaliGemma_eef_move_cups_obs30_act30_k50_1e16bbc6/checkpoints/step-018350/pretrained_model
+
+CUDA_VISIBLE_DEVICES=0 python franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=pi0 \
+  --pretrained_name_or_path="$PI0_SCHEMA2_CHECKPOINT" \
+  --actions_per_chunk=50 \
+  --policy_device=cuda
+```
+
+### 4.2 Client
+
+```bash
+cd /home/pnp/Projects/lerobot
+
+python -m lerobot_robot_franka_ros.ros2_client \
+  --server_address=127.0.0.1:8080 \
+  --robot.type=franka_ros \
+  --robot.id=franka_pi0_schema2 \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
+  --robot.gripper_open_position=0.0 \
+  --robot.gripper_closed_position=0.8 \
+  --task='move the paper cup from one end of the can to the other.' \
+  --policy_type=pi0 \
+  --pretrained_name_or_path=server-owned \
+  --policy_device=cpu \
+  --client_device=cpu \
+  --actions_per_chunk=50 \
+  --action_offset=1 \
+  --fps=30 \
+  --chunk_size_threshold=0.5 \
+  --aggregate_fn_name=latest_only \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=10 \
+  '--rename_map={"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}'
+```
+
+主 manifest 应保持：
+
+```text
+schema_version=2
+checkpoint_type=franka_pi0_configurable_parameter_eef
+parameter_training.schema_version=1
+training_graph.schema_version=2
+```
+
+不要再把外层 manifest 临时伪装为 schema 1/full。
+
+## 5. FastWAM deployment schema 1：move-cups
+
+固定契约：
+
+```text
+task:       move the paper cup from one end of the can to the other.
+fps:        30
+chunk:      32
+rename_map: {}
+```
+
+### 5.1 当前运行环境限制
+
+FastWAM artifact、runtime YAML、dataset contract、stats、text embedding、Wan VAE 和 FastWAM
+source tree 的 SHA-256 曾通过 deployment manifest 校验。当前启动只对 12 GB checkpoint 和
+Wan VAE 检查路径、存在性与文件大小，不再重复计算它们的完整 SHA-256；小型 runtime、stats、
+text context 和 source tree 仍校验内容。但是当前两个现成环境都不能完整启动真模型：
+
+- `lerobot` 环境是 Python 3.12，但缺少 Hydra、OmegaConf、boto3 和 FastWAM runtime；
+- `fastwam` 环境依赖较全，但仍是 Python 3.10，且缺少当前 LeRobot/draccus。
+
+当前实现是在同一个 server 进程内加载 FastWAM，并没有独立 worker。因此执行下面的 server
+命令前，必须先准备一个同时满足当前 LeRobot 和 FastWAM 依赖的 Python 3.12 serving 环境。
+真实 12 GB FastWAM 权重尚未完成 CUDA load smoke，不能把 artifact hash 校验通过等同于真模型
+已跑通。
+
+环境准备完成后先执行：
+
+```bash
+PYTHONPATH=/m2v_intern/tujiahang/Projects/FastWAM/src \
+  python -c 'import torch, hydra, omegaconf, boto3; import fastwam; print(torch.__version__)'
+```
+
+### 5.2 Server
+
+```bash
+cd /m2v_intern/tujiahang/Projects/lerobot
+
+export FASTWAM_CHECKPOINT=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/franka_eef_move_cups/checkpoints/weights/step_019650.pt
+export DIFFSYNTH_MODEL_BASE_PATH=/m2v_intern/tujiahang/Projects/FastWAM/checkpoints
+
+CUDA_VISIBLE_DEVICES=0 python franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=fastwam \
+  --pretrained_name_or_path="$FASTWAM_CHECKPOINT" \
+  --actions_per_chunk=32 \
+  --policy_device=cuda
+```
+
+### 5.3 Client
+
+```bash
+cd /home/pnp/Projects/lerobot
+
+python -m lerobot_robot_franka_ros.ros2_client \
+  --server_address=127.0.0.1:8080 \
+  --robot.type=franka_ros \
+  --robot.id=franka_fastwam_schema1 \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
+  --robot.gripper_open_position=0.0 \
+  --robot.gripper_closed_position=0.8 \
+  --robot.gripper_max_skew_s=0.01 \
+  --task='move the paper cup from one end of the can to the other.' \
+  --policy_type=fastwam \
+  --pretrained_name_or_path=server-owned \
+  --policy_device=cpu \
+  --client_device=cpu \
+  --actions_per_chunk=32 \
+  --action_offset=1 \
+  --fps=30 \
+  --chunk_size_threshold=0.5 \
+  --aggregate_fn_name=latest_only \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=30 \
+  '--rename_map={}'
+```
+
+FastWAM 必须使用空 `rename_map`；不要复制 PI0 的 camera rename map。
+
+## 6. 常见 fail-fast 报错
+
+| 报错 | 含义与处理 |
+|---|---|
+| `server=2, client=None` | client 实际加载了旧 wire/protobuf；同步代码、重装 ROS 插件并重启进程 |
+| checkpoint 文件缺失或 size mismatch | 路径错误、文件不完整或复制中断；重新检查 checkpoint 目录 |
+| strict tensor key/shape/load 错误 | 权重与当前模型代码确实不兼容；使用对应训练代码或 checkpoint |
+| `observation task does not match` | client `--task` 必须与 checkpoint task 完全一致，包括句号 |
+| FastWAM import/Hydra 错误 | 当前 Python 环境未同时满足 LeRobot 与 FastWAM 依赖 |
+
+启动后如果 server 已收到 observation 却没有入队，确认 server 使用：
+
+```text
+--observation_similarity_mode=none
+```
+
+这样不会因为 state 与上一帧相似而跳过 inference。
