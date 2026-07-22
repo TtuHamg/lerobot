@@ -105,6 +105,8 @@ class _TinyLanguageModel(nn.Module):
 class _TinyPaliModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
+        self.vision_tower = nn.Linear(2, 2)
+        self.multi_modal_projector = nn.Linear(2, 2)
         self.language_model = _TinyLanguageModel()
 
 
@@ -141,7 +143,10 @@ class _TinyCore(nn.Module):
         super().__init__()
         self.paligemma_with_expert = _TinyCombined()
         self.action_in_proj = nn.Linear(3, 2)
+        self.action_out_proj = nn.Linear(2, 3)
         self.state_proj = nn.Linear(2, 2)
+        self.action_time_mlp_in = nn.Linear(2, 2)
+        self.action_time_mlp_out = nn.Linear(2, 2)
         self.gradient_checkpointing_enabled = True
 
 

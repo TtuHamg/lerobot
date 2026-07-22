@@ -1,0 +1,117 @@
+{
+  "schema_version": 2,
+  "phase": "PI0_FULL_TRAINING_GRAPH_PREFLIGHT",
+  "status": "PASS",
+  "generated_at_utc": "2026-07-15T13:41:17Z",
+  "scope": "strict local checkpoint load, canonical training-graph repair, and official processor construction only",
+  "training_started": false,
+  "checkpoint_saved": false,
+  "hub_upload": false,
+  "wandb_run_created": false,
+  "checkpoint": {
+    "repo_id": "lerobot/pi0_base",
+    "local_snapshot_revision": "25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "local_snapshot_path": "/ytech_milm_intern/tujiahang/.cache/huggingface/hub/models--lerobot--pi0_base/snapshots/25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "weights_size_bytes": 14005618584,
+    "weights_namespace": "pi0_core_unprefixed",
+    "strict": true,
+    "missing_keys": [],
+    "unexpected_keys": [],
+    "resolved_checkpoint_aliases": {
+      "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight": "paligemma_with_expert.paligemma.lm_head.weight"
+    },
+    "dropped_checkpoint_keys": {
+      "paligemma_with_expert.gemma_expert.lm_head.weight": {
+        "dtype": "F32",
+        "shape": [257152, 1024],
+        "verified_before_drop": true,
+        "reason": "unused causal-LM output head; PI0 diffusion calls gemma_expert.model directly"
+      }
+    },
+    "verified_tensor": {
+      "checkpoint_key": "action_in_proj.bias",
+      "model_key": "model.action_in_proj.bias",
+      "shape": [1024],
+      "checkpoint_dtype": "torch.float32",
+      "model_dtype": "torch.float32",
+      "checkpoint_tensor_sha256": "4c06cfc44340a7c14bfb617544fb6c49a6ee2feeba78dc02fc4418c6423c6dd6",
+      "exact_after_model_dtype_cast": true
+    }
+  },
+  "training_graph": {
+    "paligemma_lm_head_tied": true,
+    "paligemma_lm_head_key": "paligemma_with_expert.paligemma.lm_head.weight",
+    "paligemma_embed_tokens_key": "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight",
+    "paligemma_tied_weight_shape": [257152, 2048],
+    "deduplicated_tied_parameter_count": 526647296,
+    "expert_lm_head_pruned": true,
+    "unused_expert_lm_head_key": "paligemma_with_expert.gemma_expert.lm_head.weight",
+    "unused_expert_lm_head_shape": [257152, 1024],
+    "pruned_unused_parameter_count": 263323648,
+    "parameters_removed_from_optimizer": 789970944,
+    "repair_timing": "immediately after PI0Policy construction and before strict checkpoint load or optimizer construction"
+  },
+  "parameters": {
+    "parameter_tensor_count": 776,
+    "total_unique_parameters": 3238048528,
+    "trainable_parameters": 3238048528,
+    "trainable_fraction": 1.0,
+    "lora_parameter_count": 0,
+    "gradient_checkpointing_enabled": true
+  },
+  "effective_stats": {
+    "source": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/data/lerobot/franka_current_eef_obs15_act15_v1_22of25_76b839b2/meta/pi0_eef_stats.json",
+    "effective_stats_sha256": "2fd71a75a7005cfc76e20467c9fea294e39b1edc6718821e2e36db37ff52a4d9",
+    "injected_feature_keys": ["observation.state", "action"],
+    "dimensions": {
+      "observation.state": 10,
+      "action": 7
+    },
+    "counts": {
+      "observation.state": 7465,
+      "action": 373250
+    }
+  },
+  "processors": {
+    "factory": "lerobot.policies.pi0.processor_pi0.make_pi0_pre_post_processors",
+    "preprocessor_steps": [
+      "RenameObservationsProcessorStep",
+      "AddBatchDimensionProcessorStep",
+      "Pi0NewLineProcessor",
+      "TokenizerProcessorStep",
+      "DeviceProcessorStep",
+      "RelativeActionsProcessorStep",
+      "NormalizerProcessorStep"
+    ],
+    "postprocessor_steps": [
+      "UnnormalizerProcessorStep",
+      "AbsoluteActionsProcessorStep",
+      "DeviceProcessorStep"
+    ]
+  },
+  "performance": {
+    "device": "cuda:0 under CUDA_VISIBLE_DEVICES=1",
+    "physical_gpu_index": 1,
+    "gpu": "NVIDIA A800-SXM4-80GB",
+    "elapsed_seconds": 137.25307981669903,
+    "gpu_max_memory_allocated_gib": 19.857553005218506,
+    "gpu_max_memory_reserved_gib": 20.318359375,
+    "gpu_memory_released_after_smoke": true
+  },
+  "strictness": {
+    "expert_head_drop_is_exact_key_and_shape_checked": true,
+    "all_other_unexpected_keys_are_fatal": true,
+    "paligemma_alias_accepts_either_single_physical_key": true,
+    "both_physical_tied_keys_are_rejected_as_ambiguous": true,
+    "project_checkpoint_manifest_training_graph_is_checked_on_resume": true,
+    "project_checkpoint_save_reload_remains_strict": true
+  },
+  "implementation": {
+    "helper": "franka_project/src/franka_eef_pipeline/pi0_training.py",
+    "helper_sha256": "8e02253391a875b01737fe1e96c03a23c8b3c9108a9b507a3aea9350cb1294db",
+    "tests": "franka_project/tests/test_pi0_training.py",
+    "tests_sha256": "35167375ec8234bace116e9e343ed405efed176d00d2b47cbb71cd6ab70247f2",
+    "focused_test_result": "10 passed",
+    "project_test_result": "73 passed, 1 external mcap_ros2 deprecation warning"
+  }
+}

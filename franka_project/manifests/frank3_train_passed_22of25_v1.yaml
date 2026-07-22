@@ -1,0 +1,2227 @@
+schema_version: 1
+name: frank3_train_passed_22of25_v1
+status: FROZEN_D3_AUTHORIZED
+generated_at_utc: '2026-07-15T12:24:52.830049+00:00'
+scope_config: /m2v_intern/tujiahang/Projects/lerobot/franka_project/configs/data/franka_scope_22of25_v1.yaml
+scope_config_sha256: 2dd95dcd5b9b953abd816d7863af1b38d92275923af884eadcbd07527273bd56
+scope_content_sha256: 86402a4138002b1ff6e02d95e7f434c5ef3f658c362fb88253ff8b1c44a69461
+source_manifest: /ytech_milm/collect_data_103/frank3/20260714/DATA/manifests/train_passed.yaml
+source_manifest_sha256: d2ba4dc819eafd0163ed6673f53ea6e6cc7d492b075978c4db925c5b68dcf38b
+data_root: /ytech_milm/collect_data_103/frank3/20260714/DATA
+selection_policy: include_source_episode_only_when_its_single_declared_mcap_is_a_regular_file
+n_source_episodes: 25
+n_episodes: 22
+n_excluded_missing: 3
+total_duration_s: 608.013
+total_cam_frames: 8987
+total_cam2_frames: 9007
+task_instruction: stack the cups
+timestamp_source: mcap_log_time_ns
+eef_semantic: measured_configured_end_effector_pose_O_T_EE_in_base
+deployment_requirement: same_configured_EE_frame_and_TCP
+excluded_missing:
+- source_index: 15
+  episode_id: run_20260714_202237_00032
+  expected_mcap_path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_202237_00032/run_20260714_202237_00032_0.mcap
+  reason: declared_raw_mcap_missing_at_scope_freeze
+  duration_s: 29.15
+  cam1_frames: 435
+  source_episode_record_sha256: 87ce2c5bdba1cedd979f758a4edd14ea8bc1a64014088150204ee7cdf49cf6bf
+- source_index: 22
+  episode_id: run_20260714_175543_00008
+  expected_mcap_path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_175543_00008/run_20260714_175543_00008_0.mcap
+  reason: declared_raw_mcap_missing_at_scope_freeze
+  duration_s: 45.769
+  cam1_frames: 685
+  source_episode_record_sha256: d6390770031bdf3bd6a5752dc6d7f12f782bb01645e3156c750aef22e11e2741
+- source_index: 24
+  episode_id: run_20260714_165338_00005
+  expected_mcap_path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_165338_00005/run_20260714_165338_00005_0.mcap
+  reason: declared_raw_mcap_missing_at_scope_freeze
+  duration_s: 15.442
+  cam1_frames: 201
+  source_episode_record_sha256: 087d3a9ef789756e874bfb7c0a439321931b7784faecc257273829a2a1d1eaaa
+mcap_integrity_strategy:
+  identity: byte_size_plus_full_file_sha256
+  algorithm: sha256
+  mode: full_file_streaming
+  chunk_bytes: 8388608
+episodes:
+- episode_id: run_20260714_212901_00063
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063
+  relative_path: run_20260714_212901_00063
+  mcap_files:
+  - run_20260714_212901_00063_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 39.308
+  message_count: 292498
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784035751578568222
+  topic_counts:
+    /franka/joint_states: 39118
+    /gripper/joint_states: 19650
+    /franka_robot_state_broadcaster/current_pose: 1177
+    /camera1/camera1/color/image_raw: 588
+    /camera2/camera2/color/image_raw: 587
+    /joint_states: 1179
+    /haptic_twist: 76733
+    /haptic_pose: 76734
+    /haptic_button: 76732
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 76734
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 76733
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 76732
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 39118
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 19650
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 1179
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 1177
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 588
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 587
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 588
+  approx_cam_hz: 14.96
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 39.3s · joints 995Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 0
+  mcap_integrity:
+  - name: run_20260714_212901_00063_0.mcap
+    size_bytes: 1124850283
+    sha256: 2f18a79f8b457e57e8e4e905d3ac343d308c0a395fa3d7a905ed098e02427f82
+- episode_id: run_20260714_211745_00057
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211745_00057
+  relative_path: run_20260714_211745_00057
+  mcap_files:
+  - run_20260714_211745_00057_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 29.978
+  message_count: 188169
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784035075664830850
+  topic_counts:
+    /franka/joint_states: 27118
+    /gripper/joint_states: 13599
+    /franka_robot_state_broadcaster/current_pose: 814
+    /camera1/camera1/color/image_raw: 411
+    /camera2/camera2/color/image_raw: 424
+    /joint_states: 900
+    /haptic_twist: 48299
+    /haptic_pose: 48301
+    /haptic_button: 48303
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 48303
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 48301
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 48299
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 27118
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13599
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 900
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 814
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 424
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 411
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 411
+  approx_cam_hz: 13.71
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 30.0s · joints 905Hz, pose 27Hz, cam1 14Hz, cam2 14Hz · gaps: cam1×1, cam2×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 1
+  mcap_integrity:
+  - name: run_20260714_211745_00057_0.mcap
+    size_bytes: 797216205
+    sha256: 3ee49e6af9fac1fff6b9dd776c899e15d62b8705330909f318d453e5c1586256
+- episode_id: run_20260714_211529_00055
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211529_00055
+  relative_path: run_20260714_211529_00055
+  mcap_files:
+  - run_20260714_211529_00055_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 39.789
+  message_count: 265525
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784034941698962916
+  topic_counts:
+    /franka/joint_states: 39779
+    /gripper/joint_states: 19873
+    /franka_robot_state_broadcaster/current_pose: 1195
+    /camera1/camera1/color/image_raw: 585
+    /camera2/camera2/color/image_raw: 585
+    /joint_states: 1177
+    /haptic_twist: 67442
+    /haptic_pose: 67445
+    /haptic_button: 67444
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 67445
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 67444
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 67442
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 39779
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 19873
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 1195
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 1177
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 585
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 585
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 585
+  approx_cam_hz: 14.7
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 39.8s · joints 1000Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 2
+  mcap_integrity:
+  - name: run_20260714_211529_00055_0.mcap
+    size_bytes: 1117758447
+    sha256: aec61e003c661f7444920f50c49c6e96a451ed6e8a7c8ad301668c0b33fa5656
+- episode_id: run_20260714_210915_00052
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210915_00052
+  relative_path: run_20260714_210915_00052
+  mcap_files:
+  - run_20260714_210915_00052_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 27.221
+  message_count: 189570
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784034563913227024
+  topic_counts:
+    /franka/joint_states: 27021
+    /gripper/joint_states: 13279
+    /franka_robot_state_broadcaster/current_pose: 812
+    /camera1/camera1/color/image_raw: 407
+    /camera2/camera2/color/image_raw: 408
+    /joint_states: 797
+    /haptic_twist: 48795
+    /haptic_pose: 48798
+    /haptic_button: 49253
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 49253
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 48798
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 48795
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 27021
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13279
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 812
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 797
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 408
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 407
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 407
+  approx_cam_hz: 14.95
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 27.2s · joints 993Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 3
+  mcap_integrity:
+  - name: run_20260714_210915_00052_0.mcap
+    size_bytes: 778832020
+    sha256: f2be0b5b4c9d64e1a1d8d6dcd0b687ba16c6f4a40e02c1165eb18dad47f1f43c
+- episode_id: run_20260714_210830_00051
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210830_00051
+  relative_path: run_20260714_210830_00051
+  mcap_files:
+  - run_20260714_210830_00051_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 24.471
+  message_count: 158656
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784034520926109162
+  topic_counts:
+    /franka/joint_states: 21427
+    /gripper/joint_states: 12066
+    /franka_robot_state_broadcaster/current_pose: 644
+    /camera1/camera1/color/image_raw: 324
+    /camera2/camera2/color/image_raw: 363
+    /joint_states: 729
+    /haptic_twist: 41036
+    /haptic_pose: 41034
+    /haptic_button: 41033
+  all_topics:
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 41036
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 41034
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 41033
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 21427
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 12066
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 729
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 644
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 363
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 324
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 324
+  approx_cam_hz: 13.24
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 24.5s · joints 876Hz, pose 26Hz, cam1 13Hz, cam2 15Hz · gaps: cam2×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 4
+  mcap_integrity:
+  - name: run_20260714_210830_00051_0.mcap
+    size_bytes: 656099407
+    sha256: b851c9f35e0cfa71c8d71f43b84bcca0bcb4418fda81e1d9631cae5c9d6df4be
+- episode_id: run_20260714_210537_00050
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210537_00050
+  relative_path: run_20260714_210537_00050
+  mcap_files:
+  - run_20260714_210537_00050_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 26.297
+  message_count: 181642
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784034351686054244
+  topic_counts:
+    /franka/joint_states: 26167
+    /gripper/joint_states: 13143
+    /franka_robot_state_broadcaster/current_pose: 786
+    /camera1/camera1/color/image_raw: 393
+    /camera2/camera2/color/image_raw: 390
+    /joint_states: 783
+    /haptic_twist: 46660
+    /haptic_pose: 46658
+    /haptic_button: 46662
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 46662
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 46660
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 46658
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 26167
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13143
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 786
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 783
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 393
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 390
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 393
+  approx_cam_hz: 14.94
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 26.3s · joints 995Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: cam2×2'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 5
+  mcap_integrity:
+  - name: run_20260714_210537_00050_0.mcap
+    size_bytes: 748310898
+    sha256: 68948f710e1b82fb17e376dbb5e78b3907debfdd085bfce102b10853c015192a
+- episode_id: run_20260714_210246_00048
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210246_00048
+  relative_path: run_20260714_210246_00048
+  mcap_files:
+  - run_20260714_210246_00048_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 25.905
+  message_count: 208798
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784034174958548542
+  topic_counts:
+    /franka/joint_states: 25387
+    /gripper/joint_states: 12697
+    /franka_robot_state_broadcaster/current_pose: 763
+    /camera1/camera1/color/image_raw: 388
+    /camera2/camera2/color/image_raw: 386
+    /joint_states: 778
+    /haptic_twist: 56133
+    /haptic_pose: 56133
+    /haptic_button: 56133
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 56133
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 56133
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 56133
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 25387
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 12697
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 778
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 763
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 388
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 386
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 388
+  approx_cam_hz: 14.98
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 25.9s · joints 980Hz, pose 29Hz, cam1 15Hz, cam2 15Hz · gaps: cam2×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 6
+  mcap_integrity:
+  - name: run_20260714_210246_00048_0.mcap
+    size_bytes: 742447556
+    sha256: 1c129985e8ec718d060abdbd7de1cfe338d22503b22e0a6e2b72c20d510fa11e
+- episode_id: run_20260714_205904_00046
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205904_00046
+  relative_path: run_20260714_205904_00046
+  mcap_files:
+  - run_20260714_205904_00046_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 28.023
+  message_count: 219607
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033951902477004
+  topic_counts:
+    /franka/joint_states: 27754
+    /gripper/joint_states: 13948
+    /franka_robot_state_broadcaster/current_pose: 834
+    /camera1/camera1/color/image_raw: 419
+    /camera2/camera2/color/image_raw: 419
+    /joint_states: 838
+    /haptic_twist: 58418
+    /haptic_pose: 58567
+    /haptic_button: 58410
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 58567
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 58418
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 58410
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 27754
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13948
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 838
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 834
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 419
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 419
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 419
+  approx_cam_hz: 14.95
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 28.0s · joints 990Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 7
+  mcap_integrity:
+  - name: run_20260714_205904_00046_0.mcap
+    size_bytes: 803290407
+    sha256: 2ef4ac59b2236cf5557b46db8dbdd831d73a2bec97f3381fac10440fd1e89b57
+- episode_id: run_20260714_205710_00044
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205710_00044
+  relative_path: run_20260714_205710_00044
+  mcap_files:
+  - run_20260714_205710_00044_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 29.539
+  message_count: 225585
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033840522211588
+  topic_counts:
+    /franka/joint_states: 29423
+    /gripper/joint_states: 14723
+    /franka_robot_state_broadcaster/current_pose: 883
+    /camera1/camera1/color/image_raw: 444
+    /camera2/camera2/color/image_raw: 443
+    /joint_states: 887
+    /haptic_twist: 59595
+    /haptic_pose: 59592
+    /haptic_button: 59595
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 59595
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 59595
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 59592
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 29423
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 14723
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 887
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 883
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 444
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 443
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 444
+  approx_cam_hz: 15.03
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 29.5s · joints 996Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 8
+  mcap_integrity:
+  - name: run_20260714_205710_00044_0.mcap
+    size_bytes: 849586248
+    sha256: 2a1903f47313cd739a1326abf5511d2564efffbf36432e80746ebb51c153364a
+- episode_id: run_20260714_205615_00043
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205615_00043
+  relative_path: run_20260714_205615_00043
+  mcap_files:
+  - run_20260714_205615_00043_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 27.719
+  message_count: 210273
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033784422291131
+  topic_counts:
+    /franka/joint_states: 27143
+    /gripper/joint_states: 13383
+    /franka_robot_state_broadcaster/current_pose: 816
+    /camera1/camera1/color/image_raw: 408
+    /camera2/camera2/color/image_raw: 409
+    /joint_states: 832
+    /haptic_twist: 55758
+    /haptic_pose: 55762
+    /haptic_button: 55762
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 55762
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 55762
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 55758
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 27143
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13383
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 832
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 816
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 409
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 408
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 408
+  approx_cam_hz: 14.72
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 27.7s · joints 979Hz, pose 29Hz, cam1 15Hz, cam2 15Hz · gaps: cam1×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 9
+  mcap_integrity:
+  - name: run_20260714_205615_00043_0.mcap
+    size_bytes: 782790755
+    sha256: a5320b3ca792cd9eab71883d42a1245f94c6ec6a3d4f3c188d34185c41d8c84d
+- episode_id: run_20260714_204910_00039
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204910_00039
+  relative_path: run_20260714_204910_00039
+  mcap_files:
+  - run_20260714_204910_00039_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 34.159
+  message_count: 259213
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033357586434636
+  topic_counts:
+    /franka/joint_states: 34020
+    /gripper/joint_states: 16977
+    /franka_robot_state_broadcaster/current_pose: 1023
+    /camera1/camera1/color/image_raw: 509
+    /camera2/camera2/color/image_raw: 512
+    /joint_states: 1025
+    /haptic_twist: 68384
+    /haptic_pose: 68387
+    /haptic_button: 68376
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 68387
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 68384
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 68376
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 34020
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 16977
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 1025
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 1023
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 512
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 509
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 509
+  approx_cam_hz: 14.9
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 34.2s · joints 996Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 10
+  mcap_integrity:
+  - name: run_20260714_204910_00039_0.mcap
+    size_bytes: 977913469
+    sha256: 7e9f8a9e9525164061e25f2181a1be76f584e87a6aa90199151f64e6a564effe
+- episode_id: run_20260714_204750_00038
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204750_00038
+  relative_path: run_20260714_204750_00038
+  mcap_files:
+  - run_20260714_204750_00038_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 26.718
+  message_count: 191641
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033280006601160
+  topic_counts:
+    /franka/joint_states: 26021
+    /gripper/joint_states: 12951
+    /franka_robot_state_broadcaster/current_pose: 782
+    /camera1/camera1/color/image_raw: 401
+    /camera2/camera2/color/image_raw: 372
+    /joint_states: 775
+    /haptic_twist: 50113
+    /haptic_pose: 50111
+    /haptic_button: 50115
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 50115
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 50113
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 50111
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 26021
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 12951
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 782
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 775
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 401
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 372
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 401
+  approx_cam_hz: 15.01
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 26.7s · joints 974Hz, pose 29Hz, cam1 15Hz, cam2 14Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 11
+  mcap_integrity:
+  - name: run_20260714_204750_00038_0.mcap
+    size_bytes: 740009857
+    sha256: b3d4840daa89532ce982560e364eb51c3c821d4db0b21746159f65e6c4c97ffa
+- episode_id: run_20260714_204648_00037
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204648_00037
+  relative_path: run_20260714_204648_00037
+  mcap_files:
+  - run_20260714_204648_00037_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 27.993
+  message_count: 209807
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033216615364928
+  topic_counts:
+    /franka/joint_states: 27861
+    /gripper/joint_states: 13947
+    /franka_robot_state_broadcaster/current_pose: 838
+    /camera1/camera1/color/image_raw: 421
+    /camera2/camera2/color/image_raw: 420
+    /joint_states: 840
+    /haptic_twist: 55160
+    /haptic_pose: 55162
+    /haptic_button: 55158
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 55162
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 55160
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 55158
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 27861
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13947
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 840
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 838
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 421
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 420
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 421
+  approx_cam_hz: 15.04
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 28.0s · joints 995Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 12
+  mcap_integrity:
+  - name: run_20260714_204648_00037_0.mcap
+    size_bytes: 805098852
+    sha256: 94b17c72838211abb6a6f4e6d9745089ff88d4a0ab3e5fd9408494ebcc2a2bd6
+- episode_id: run_20260714_204515_00035
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204515_00035
+  relative_path: run_20260714_204515_00035
+  mcap_files:
+  - run_20260714_204515_00035_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 18.775
+  message_count: 142376
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033125417504361
+  topic_counts:
+    /franka/joint_states: 18730
+    /gripper/joint_states: 9327
+    /franka_robot_state_broadcaster/current_pose: 563
+    /camera1/camera1/color/image_raw: 281
+    /camera2/camera2/color/image_raw: 280
+    /joint_states: 560
+    /haptic_twist: 37546
+    /haptic_pose: 37547
+    /haptic_button: 37542
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 37547
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 37546
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 37542
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 18730
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 9327
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 563
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 560
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 281
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 280
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 281
+  approx_cam_hz: 14.97
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 18.8s · joints 998Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 13
+  mcap_integrity:
+  - name: run_20260714_204515_00035_0.mcap
+    size_bytes: 537349035
+    sha256: 87ebe1438aa92de41936d315b50b3e310efbdd7874821131273f8adad8399702
+- episode_id: run_20260714_204409_00034
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204409_00034
+  relative_path: run_20260714_204409_00034
+  mcap_files:
+  - run_20260714_204409_00034_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 24.874
+  message_count: 193362
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784033059884711942
+  topic_counts:
+    /franka/joint_states: 24835
+    /gripper/joint_states: 12113
+    /franka_robot_state_broadcaster/current_pose: 747
+    /camera1/camera1/color/image_raw: 373
+    /camera2/camera2/color/image_raw: 373
+    /joint_states: 747
+    /haptic_twist: 51393
+    /haptic_pose: 51392
+    /haptic_button: 51389
+  all_topics:
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 51393
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 51392
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 51389
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 24835
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 12113
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 747
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 747
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 373
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 373
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 373
+  approx_cam_hz: 15.0
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 24.9s · joints 998Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 14
+  mcap_integrity:
+  - name: run_20260714_204409_00034_0.mcap
+    size_bytes: 714895710
+    sha256: e46f048a99aff23ddcdf2b7643fea93a1043256f40420dd452896a58b727e2fd
+- episode_id: run_20260714_200716_00029
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_200716_00029
+  relative_path: run_20260714_200716_00029
+  mcap_files:
+  - run_20260714_200716_00029_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 32.721
+  message_count: 260449
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784030847175397690
+  topic_counts:
+    /franka/joint_states: 32484
+    /gripper/joint_states: 16247
+    /franka_robot_state_broadcaster/current_pose: 976
+    /camera1/camera1/color/image_raw: 491
+    /camera2/camera2/color/image_raw: 491
+    /joint_states: 981
+    /haptic_twist: 69669
+    /haptic_pose: 69676
+    /haptic_button: 69434
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 69676
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 69669
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 69434
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 32484
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 16247
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 981
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 976
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 491
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 491
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 491
+  approx_cam_hz: 15.01
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 32.7s · joints 993Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 16
+  mcap_integrity:
+  - name: run_20260714_200716_00029_0.mcap
+    size_bytes: 941594644
+    sha256: d5c56231c4f3df496b7412dae5db578274d10fe3f4f137e844da6ab26a3e3ad5
+- episode_id: run_20260714_200257_00027
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_200257_00027
+  relative_path: run_20260714_200257_00027
+  mcap_files:
+  - run_20260714_200257_00027_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 42.019
+  message_count: 326298
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784030585364992132
+  topic_counts:
+    /franka/joint_states: 41351
+    /gripper/joint_states: 20809
+    /franka_robot_state_broadcaster/current_pose: 1241
+    /camera1/camera1/color/image_raw: 623
+    /camera2/camera2/color/image_raw: 626
+    /joint_states: 1249
+    /haptic_twist: 86801
+    /haptic_pose: 86802
+    /haptic_button: 86796
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 86802
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 86801
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 86796
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 41351
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 20809
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 1249
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 1241
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 626
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 623
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 623
+  approx_cam_hz: 14.83
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 42.0s · joints 984Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: cam1×1, cam2×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 17
+  mcap_integrity:
+  - name: run_20260714_200257_00027_0.mcap
+    size_bytes: 1197115502
+    sha256: 6694acc8013d553681943191b55fb7002afd57de201f3ddabc2abb8fcdc090f8
+- episode_id: run_20260714_194854_00025
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_194854_00025
+  relative_path: run_20260714_194854_00025
+  mcap_files:
+  - run_20260714_194854_00025_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 22.606
+  message_count: 175304
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784029744213326823
+  topic_counts:
+    /franka/joint_states: 22151
+    /gripper/joint_states: 11240
+    /franka_robot_state_broadcaster/current_pose: 665
+    /camera1/camera1/color/image_raw: 337
+    /camera2/camera2/color/image_raw: 338
+    /joint_states: 671
+    /haptic_twist: 46633
+    /haptic_pose: 46635
+    /haptic_button: 46634
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 46635
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 46634
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 46633
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 22151
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 11240
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 671
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 665
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 338
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 337
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 337
+  approx_cam_hz: 14.91
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 22.6s · joints 980Hz, pose 29Hz, cam1 15Hz, cam2 15Hz · gaps: cam1×1'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 18
+  mcap_integrity:
+  - name: run_20260714_194854_00025_0.mcap
+    size_bytes: 646824882
+    sha256: 3d59ecda50c46ee21d50760968ea32f2871cf9bcf7bc5707ae7aa4cf2e317da4
+- episode_id: run_20260714_194734_00024
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_194734_00024
+  relative_path: run_20260714_194734_00024
+  mcap_files:
+  - run_20260714_194734_00024_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 26.995
+  message_count: 230069
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784029661610781383
+  topic_counts:
+    /franka/joint_states: 26109
+    /gripper/joint_states: 13441
+    /franka_robot_state_broadcaster/current_pose: 784
+    /camera1/camera1/color/image_raw: 405
+    /camera2/camera2/color/image_raw: 405
+    /joint_states: 810
+    /haptic_twist: 62703
+    /haptic_pose: 62708
+    /haptic_button: 62704
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 62708
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 62704
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 62703
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 26109
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 13441
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 810
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 784
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 405
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 405
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 405
+  approx_cam_hz: 15.0
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 27.0s · joints 967Hz, pose 29Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 19
+  mcap_integrity:
+  - name: run_20260714_194734_00024_0.mcap
+    size_bytes: 777995281
+    sha256: ffcc8737b622f874a72b862157570115fccc911ee58acc062b34a14ebbe6e13c
+- episode_id: run_20260714_193528_00019
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_193528_00019
+  relative_path: run_20260714_193528_00019
+  mcap_files:
+  - run_20260714_193528_00019_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 16.277
+  message_count: 123057
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784028940201555525
+  topic_counts:
+    /franka/joint_states: 14325
+    /gripper/joint_states: 7952
+    /franka_robot_state_broadcaster/current_pose: 430
+    /camera1/camera1/color/image_raw: 235
+    /camera2/camera2/color/image_raw: 233
+    /joint_states: 486
+    /haptic_twist: 33129
+    /haptic_pose: 33132
+    /haptic_button: 33135
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 33135
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 33132
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 33129
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 14325
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 7952
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 486
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 430
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 235
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 233
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 235
+  approx_cam_hz: 14.44
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 16.3s · joints 880Hz, pose 26Hz, cam1 14Hz, cam2 14Hz · gaps: cam1×2, cam2×2'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 20
+  mcap_integrity:
+  - name: run_20260714_193528_00019_0.mcap
+    size_bytes: 448346425
+    sha256: 8e53f7fb52298aa1880a8d752382ac8175ef4bbaf1fdf2c0158b73d1251d16c4
+- episode_id: run_20260714_181728_00010
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_181728_00010
+  relative_path: run_20260714_181728_00010
+  mcap_files:
+  - run_20260714_181728_00010_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 18.23
+  message_count: 151639
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784024256935286509
+  topic_counts:
+    /franka/joint_states: 17115
+    /gripper/joint_states: 8863
+    /franka_robot_state_broadcaster/current_pose: 515
+    /camera1/camera1/color/image_raw: 268
+    /camera2/camera2/color/image_raw: 268
+    /joint_states: 547
+    /haptic_twist: 41353
+    /haptic_pose: 41354
+    /haptic_button: 41356
+  all_topics:
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 41356
+    serialization_format: cdr
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 41354
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 41353
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 17115
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 8863
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 547
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 515
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 268
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 268
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 268
+  approx_cam_hz: 14.7
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 18.2s · joints 939Hz, pose 28Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 21
+  mcap_integrity:
+  - name: run_20260714_181728_00010_0.mcap
+    size_bytes: 514728973
+    sha256: a718c68db291eca6980bc713a4084b663ab44bbd5182c87e87ccd356b41a6d0b
+- episode_id: run_20260714_165424_00006
+  path: /ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_165424_00006
+  relative_path: run_20260714_165424_00006
+  mcap_files:
+  - run_20260714_165424_00006_0.mcap
+  status: PASS
+  manual_override: false
+  manual_reason: null
+  ok_for_training: true
+  ok_for_training_relaxed: true
+  duration_s: 18.396
+  message_count: 130602
+  storage_identifier: mcap
+  ros_distro: jazzy
+  starting_time_ns: 1784019273998650838
+  topic_counts:
+    /franka/joint_states: 18129
+    /gripper/joint_states: 8700
+    /franka_robot_state_broadcaster/current_pose: 546
+    /camera1/camera1/color/image_raw: 276
+    /camera2/camera2/color/image_raw: 275
+    /joint_states: 548
+    /haptic_twist: 34040
+    /haptic_pose: 34045
+    /haptic_button: 34043
+  all_topics:
+  - name: /haptic_pose
+    type: geometry_msgs/msg/Pose
+    message_count: 34045
+    serialization_format: cdr
+  - name: /haptic_button
+    type: sensor_msgs/msg/Joy
+    message_count: 34043
+    serialization_format: cdr
+  - name: /haptic_twist
+    type: geometry_msgs/msg/Twist
+    message_count: 34040
+    serialization_format: cdr
+  - name: /franka/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 18129
+    serialization_format: cdr
+  - name: /gripper/joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 8700
+    serialization_format: cdr
+  - name: /joint_states
+    type: sensor_msgs/msg/JointState
+    message_count: 548
+    serialization_format: cdr
+  - name: /franka_robot_state_broadcaster/current_pose
+    type: geometry_msgs/msg/PoseStamped
+    message_count: 546
+    serialization_format: cdr
+  - name: /camera1/camera1/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 276
+    serialization_format: cdr
+  - name: /camera2/camera2/color/image_raw
+    type: sensor_msgs/msg/Image
+    message_count: 275
+    serialization_format: cdr
+  - name: /camera1/camera1/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  - name: /camera2/camera2/color/camera_info
+    type: sensor_msgs/msg/CameraInfo
+    message_count: 0
+    serialization_format: cdr
+  approx_cam_frames: 276
+  approx_cam_hz: 15.0
+  joint_dim: 7
+  joint_names:
+  - fr3_joint1
+  - fr3_joint2
+  - fr3_joint3
+  - fr3_joint4
+  - fr3_joint5
+  - fr3_joint6
+  - fr3_joint7
+  gripper_names:
+  - robotiq_85_left_knuckle_joint
+  ee_topic: /franka_robot_state_broadcaster/current_pose
+  camera_topics:
+    cam1: /camera1/camera1/color/image_raw
+    cam2: /camera2/camera2/color/image_raw
+  image_size:
+  - 480
+  - 640
+  - 3
+  validation_summary: 'PASS · 18.4s · joints 985Hz, pose 30Hz, cam1 15Hz, cam2 15Hz · gaps: none'
+  fail_reasons: []
+  warn_reasons: []
+  scope_source_index: 23
+  mcap_integrity:
+  - name: run_20260714_165424_00006_0.mcap
+    size_bytes: 526752549
+    sha256: 8aaa8d5a80138b7ff95920576781860b9bb5183384c7c9a6f68cd8667638fe19

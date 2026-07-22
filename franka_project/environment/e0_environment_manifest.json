@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "phase": "E0",
+  "status": "PASS",
+  "generated_at_utc": "2026-07-15T11:02:40Z",
+  "activation": {
+    "commands": [
+      "source /ytech_milm_intern/tujiahang/.bashrc >/dev/null 2>&1",
+      "conda activate lerobot",
+      "unset LD_LIBRARY_PATH"
+    ],
+    "conda_prefix": "/ytech_milm_intern/tujiahang/miniconda3/envs/lerobot",
+    "python_executable": "/ytech_milm_intern/tujiahang/miniconda3/envs/lerobot/bin/python",
+    "uv_available": false,
+    "ld_library_path_requirement": "The inherited system cuDNN 9.11 conflicts with the cuDNN 9.19 required by this PyTorch build; unset LD_LIBRARY_PATH before any CUDA run."
+  },
+  "software": {
+    "python": "3.12.13",
+    "lerobot": "0.5.2",
+    "torch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128",
+    "transformers": "5.5.4",
+    "datasets": "4.8.5",
+    "accelerate": "1.14.0",
+    "wandb": "0.27.2",
+    "numpy": "2.2.6",
+    "scipy": "1.17.1",
+    "opencv": "4.13.0",
+    "av": "15.1.0",
+    "pyarrow": "24.0.0",
+    "peft": "0.19.1",
+    "mcap": "1.4.0",
+    "mcap_ros2_support": "0.5.7",
+    "pytest": "8.4.2",
+    "lz4": "4.4.5",
+    "pypdf": "6.5.0",
+    "ffmpeg": "7.1.1",
+    "ffprobe": "7.1.1"
+  },
+  "packages_added_to_authorized_conda_environment": [
+    "mcap==1.4.0",
+    "mcap-ros2-support==0.5.7",
+    "pytest==8.4.2",
+    "lz4==4.4.5",
+    "pypdf==6.5.0"
+  ],
+  "repository": {
+    "root": "/m2v_intern/tujiahang/Projects/lerobot",
+    "head": "a869295ffadf3e82054fb8f6abdd7d31551ac55f",
+    "branch": "main",
+    "dirty": true,
+    "status_entry_count_at_snapshot": 23,
+    "tracked_diff_sha256": "94b90242b3d73842064e0bbfe3fc1fc85fa6383656418eecc750712a9c16c7d4",
+    "porcelain_status_sha256": "5b32b1ab16c61d2452f3584bd8d44db50677b2ca6b6b65fed3108411ecee4a79",
+    "uv_lock_sha256": "af48fc72356c996f4f2b746069274a373884f4e0239724ffd811f4ebcc2d84e8",
+    "note": "The worktree already contained user changes; this task preserved unrelated files and wrote project work under franka_project."
+  },
+  "compute": {
+    "driver": "535.129.03",
+    "cuda_runtime": "12.8",
+    "cudnn_version": 91900,
+    "nccl_version": "2.28.9",
+    "gpus": [
+      {
+        "index": 0,
+        "name": "NVIDIA A800-SXM4-80GB",
+        "memory_total_mib": 81920,
+        "memory_used_mib_at_snapshot": 2,
+        "bf16_supported": true
+      },
+      {
+        "index": 1,
+        "name": "NVIDIA A800-SXM4-80GB",
+        "memory_total_mib": 81920,
+        "memory_used_mib_at_snapshot": 2,
+        "bf16_supported": true
+      }
+    ],
+    "smoke": {
+      "status": "PASS",
+      "bf16_cudnn_forward_backward_finite_on_both_gpus": true,
+      "nccl_two_gpu_all_reduce": {
+        "input_values": [1.0, 2.0],
+        "result_on_each_rank": 3.0
+      },
+      "script": "franka_project/environment/e0_cuda_nccl_smoke.py",
+      "script_sha256": "7338d9f1e1dc98f03238fd60ed5ac24069ac116bebd78d3794a2d2fdcd5ade81"
+    }
+  },
+  "pretrained_checkpoint": {
+    "repo_id": "lerobot/pi0_base",
+    "local_snapshot_revision": "25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "local_path": "/ytech_milm_intern/tujiahang/.cache/huggingface/hub/models--lerobot--pi0_base/snapshots/25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "exists": true,
+    "logical_bytes": 14005628474,
+    "config_chunk_size": 50,
+    "config_max_action_dim": 32,
+    "config_max_state_dim": 32
+  },
+  "official_loader_smoke": {
+    "status": "PASS",
+    "manifest_dataset_len": 25,
+    "episode_id": "run_20260714_212901_00063",
+    "T": 588,
+    "cam1_shape": [588, 480, 640, 3],
+    "cam2_shape": [588, 480, 640, 3],
+    "image_dtype": "uint8",
+    "qpos_shape": [588, 7],
+    "gripper_shape": [588, 1],
+    "eef_shape": [588, 7]
+  },
+  "wandb_smoke": {
+    "status": "PASS",
+    "entity": "ttuhamg",
+    "project": "franka_pi0_full_eef",
+    "run_id": "syujv5nl",
+    "run_name": "e0-environment-smoke-20260715",
+    "run_state": "finished",
+    "url": "https://wandb.ai/ttuhamg/franka_pi0_full_eef/runs/syujv5nl",
+    "logged_history_key": "e0/smoke_scalar",
+    "logged_history_value": 1,
+    "logged_artifact_count": 0,
+    "model_checkpoint_uploaded": false
+  },
+  "storage": {
+    "project_filesystem_free_bytes": 251828755234816,
+    "raw_data_filesystem_free_bytes": 2001652227768320
+  }
+}

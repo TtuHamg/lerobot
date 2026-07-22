@@ -1,0 +1,66 @@
+schema_version: 1
+stage: F0-15
+job_name: pi0_full_eef_f0_obs15_act15_22of25_gb32_aepoch50
+
+dataset:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/data/lerobot/franka_current_eef_obs15_act15_v1_22of25_76b839b2
+  profile: action15
+  observation_fps: 15
+  action_fps: 15
+  chunk_size: 50
+  episode_indices: null
+  max_anchors_per_episode: null
+  expected_valid_anchors: 7465
+  expected_scope_content_sha256: 86402a4138002b1ff6e02d95e7f434c5ef3f658c362fb88253ff8b1c44a69461
+
+model:
+  pretrained_path: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_obs15_act15_gb32_v1/20260716T070032Z_pi0_full_eef_f0_obs15_act15_22of25_gb32_72b26603/checkpoints/step-002340/pretrained_model
+  strict: true
+  dtype: bfloat16
+  gradient_checkpointing: true
+  compile_model: false
+  max_state_dim: 32
+  max_action_dim: 32
+  freeze_vision_encoder: false
+  train_expert_only: false
+  use_relative_actions: false
+  peft: null
+
+training:
+  seed: 1000
+  epochs: 50
+  steps: auto
+  per_device_batch_size: 8
+  gradient_accumulation_steps: 2
+  num_workers: 4
+  shuffle: true
+  peak_lr: 1.0e-5
+  final_lr: 1.0e-6
+  warmup_steps: 1
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+  mixed_precision: bf16
+  log_freq: 50
+  monitor_freq_epochs: 1
+  monitor_max_samples: 1024
+  save_freq: epoch
+  save_optimizer_state: true
+  require_gradient_coverage: true
+  gpu_count: 2
+
+output:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_obs15_act15_gb32_aepoch50_v1
+  immutable_run_directory: true
+  save_to_hub: false
+
+wandb:
+  enable: true
+  mode: online
+  entity: ttuhamg
+  project: franka_pi0_full_eef
+  disable_artifact: true
+  save_code: false
+  tags: [franka, pi0, full_parameter, eef, obs15_act15, f0, 22of25, gb32, aepoch50]
+

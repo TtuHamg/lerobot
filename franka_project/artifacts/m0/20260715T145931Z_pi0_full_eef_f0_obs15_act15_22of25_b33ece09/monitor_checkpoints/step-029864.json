@@ -1,0 +1,72 @@
+{
+  "anchor_count": 747,
+  "checkpoint_file_ledger": {
+    "config.json": {
+      "sha256": "e2c25de9683b5a82ed9ebbc9e3871a89a79af5e99381ccb884ff82e2a6855a56",
+      "size_bytes": 2513
+    },
+    "franka_eef_geometry_manifest.json": {
+      "sha256": "e9bee10d74e692565222e16e73e61a33df1c1f96ed12177debdaa6ae025f8945",
+      "size_bytes": 2324
+    },
+    "franka_pi0_checkpoint_manifest.json": {
+      "sha256": "e0ec4a56e82cf1f799e789e951ce6b880d4d2978469223d8e86e758d504f81b8",
+      "size_bytes": 33247
+    },
+    "model.safetensors": {
+      "sha256": "5c1fd0917eccde5b1e35d5343587b6a0ce433382e2fb1d8762868a9cb20b1278",
+      "size_bytes": 7312556248
+    },
+    "pi0_eef_stats.json": {
+      "sha256": "4cd544adeb17bb594131e6507141504e834cb0a1ac76d822c6f36260ee96aed6",
+      "size_bytes": 5995
+    },
+    "policy_postprocessor.json": {
+      "sha256": "1c34e47ea2101b993b6c379edb679519fd06ac14a69e8b3f361aec7dcaf2c502",
+      "size_bytes": 777
+    },
+    "policy_postprocessor_step_0_unnormalizer_processor.safetensors": {
+      "sha256": "a95830d8ec6c81a550f7bbac6a8c472475c4753a92f6ef2e37b42906255864b5",
+      "size_bytes": 2068
+    },
+    "policy_preprocessor.json": {
+      "sha256": "2d1d8cab5f52d43f1ad097309624dfaaf914d33464ff48fde1c48239276f30e1",
+      "size_bytes": 2106
+    },
+    "policy_preprocessor_step_6_normalizer_processor.safetensors": {
+      "sha256": "a95830d8ec6c81a550f7bbac6a8c472475c4753a92f6ef2e37b42906255864b5",
+      "size_bytes": 2068
+    }
+  },
+  "checkpoint_file_ledger_sha256": "6b478732ee3422f2c56e3a48b71fbde78c7e6820548def2cb9746112bbe8af42",
+  "checkpoint_step": 29864,
+  "contract_sha256": "137add1d24ee9e115db47a7850169a88eb458e0c80f9eede49006b21cacd7de4",
+  "evaluation_seconds": 220.32673913612962,
+  "generated_at_utc": "2026-07-15T23:44:10.183053+00:00",
+  "logical_indices_sha256": "5c9a1fb1a5cba84f36538e0f66d4ed0333802094109f4146540d5d89bf33cc95",
+  "manifest_sha256": "c238c5a9ca2148a1de73a55700fba1fa66d4b94611ae0c77964bc197afe1024c",
+  "npz_path": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/m0/20260715T145931Z_pi0_full_eef_f0_obs15_act15_22of25_b33ece09/monitor_checkpoints/step-029864.npz",
+  "npz_sha256": "e1a103a77641efab344bb3725ecc492aa39697aacbf070e2bab57b19a30957cb",
+  "npz_size_bytes": 1858350,
+  "prediction_seed": 1001000,
+  "processor_check": {
+    "action_roundtrip": true,
+    "roundtrip_atol": 2e-05,
+    "roundtrip_rtol": 2e-05,
+    "saved_processors_match_factory_effective_stats": true
+  },
+  "schema_version": 1,
+  "status": "COMPLETE",
+  "strict_load": {
+    "effective_stats_sha256": "2fd71a75a7005cfc76e20467c9fea294e39b1edc6718821e2e36db37ff52a4d9",
+    "missing_keys": [],
+    "project_manifest_present": true,
+    "strict": true,
+    "unexpected_keys": [],
+    "verified_tensor_key": "action_in_proj.bias",
+    "verified_tensor_sha256": "2c95cdc99b4e4b9a9dbae2a42213d6de30b179428eccdb44046ca5510cfe7a24",
+    "weights_namespace": "pi0_core_unprefixed",
+    "weights_path": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_obs15_act15_v1/20260715T145931Z_pi0_full_eef_f0_obs15_act15_22of25_b33ece09/checkpoints/step-029864/pretrained_model/model.safetensors",
+    "weights_size_bytes": 7312556248
+  }
+}

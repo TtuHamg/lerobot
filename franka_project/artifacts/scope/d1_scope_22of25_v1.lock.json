@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "phase": "D1_SCOPE_FREEZE",
+  "scope": "franka_scope_22of25_v1",
+  "status": "PASS_D3_AUTHORIZED_FOR_VERSIONED_22OF25_SCOPE",
+  "generated_at_utc": "2026-07-15T12:24:52.830049+00:00",
+  "authorization": {
+    "decision": "proceed_with_currently_available_strict_pass_data_for_same_machine_experiment",
+    "authorized_episode_count": 22,
+    "source_episode_count": 25,
+    "same_machine_as_collection": true,
+    "same_configured_eef_tcp_as_collection": true,
+    "scope_boundary": "data_conversion_and_offline_training_experiment",
+    "real_robot_rollout_authorized_by_this_scope": false,
+    "note": "The user authorized experiment execution on the current machine. The D1 scope is therefore versioned to the 22 strict-PASS MCAP files that are physically present. This does not mutate or reinterpret the original 25-episode manifest."
+  },
+  "source": {
+    "manifest": "/ytech_milm/collect_data_103/frank3/20260714/DATA/manifests/train_passed.yaml",
+    "manifest_sha256": "d2ba4dc819eafd0163ed6673f53ea6e6cc7d492b075978c4db925c5b68dcf38b",
+    "episode_count": 25,
+    "conversion_authorized": false
+  },
+  "derived": {
+    "manifest": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/manifests/frank3_train_passed_22of25_v1.yaml",
+    "manifest_sha256": "76b839b29840714dc6a0c58261d2709b25dfd846fe7f13761787fd6d02b17a77",
+    "scope_content_sha256": "86402a4138002b1ff6e02d95e7f434c5ef3f658c362fb88253ff8b1c44a69461",
+    "episode_count": 22,
+    "duration_s": 608.013,
+    "cam1_frames": 8987,
+    "cam2_frames": 9007,
+    "d3_conversion_authorized": true
+  },
+  "excluded_missing": [
+    {
+      "source_index": 15,
+      "episode_id": "run_20260714_202237_00032",
+      "expected_mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_202237_00032/run_20260714_202237_00032_0.mcap",
+      "reason": "declared_raw_mcap_missing_at_scope_freeze",
+      "duration_s": 29.15,
+      "cam1_frames": 435,
+      "source_episode_record_sha256": "87ce2c5bdba1cedd979f758a4edd14ea8bc1a64014088150204ee7cdf49cf6bf"
+    },
+    {
+      "source_index": 22,
+      "episode_id": "run_20260714_175543_00008",
+      "expected_mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_175543_00008/run_20260714_175543_00008_0.mcap",
+      "reason": "declared_raw_mcap_missing_at_scope_freeze",
+      "duration_s": 45.769,
+      "cam1_frames": 685,
+      "source_episode_record_sha256": "d6390770031bdf3bd6a5752dc6d7f12f782bb01645e3156c750aef22e11e2741"
+    },
+    {
+      "source_index": 24,
+      "episode_id": "run_20260714_165338_00005",
+      "expected_mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_165338_00005/run_20260714_165338_00005_0.mcap",
+      "reason": "declared_raw_mcap_missing_at_scope_freeze",
+      "duration_s": 15.442,
+      "cam1_frames": 201,
+      "source_episode_record_sha256": "087d3a9ef789756e874bfb7c0a439321931b7784faecc257273829a2a1d1eaaa"
+    }
+  ],
+  "mcap_integrity": {
+    "strategy": "byte_size_plus_full_file_sha256",
+    "algorithm": "sha256",
+    "chunk_bytes": 8388608,
+    "total_bytes": 17229807405,
+    "files": [
+      {
+        "derived_index": 0,
+        "source_index": 0,
+        "episode_id": "run_20260714_212901_00063",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063/run_20260714_212901_00063_0.mcap",
+        "size_bytes": 1124850283,
+        "sha256": "2f18a79f8b457e57e8e4e905d3ac343d308c0a395fa3d7a905ed098e02427f82"
+      },
+      {
+        "derived_index": 1,
+        "source_index": 1,
+        "episode_id": "run_20260714_211745_00057",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211745_00057/run_20260714_211745_00057_0.mcap",
+        "size_bytes": 797216205,
+        "sha256": "3ee49e6af9fac1fff6b9dd776c899e15d62b8705330909f318d453e5c1586256"
+      },
+      {
+        "derived_index": 2,
+        "source_index": 2,
+        "episode_id": "run_20260714_211529_00055",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211529_00055/run_20260714_211529_00055_0.mcap",
+        "size_bytes": 1117758447,
+        "sha256": "aec61e003c661f7444920f50c49c6e96a451ed6e8a7c8ad301668c0b33fa5656"
+      },
+      {
+        "derived_index": 3,
+        "source_index": 3,
+        "episode_id": "run_20260714_210915_00052",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210915_00052/run_20260714_210915_00052_0.mcap",
+        "size_bytes": 778832020,
+        "sha256": "f2be0b5b4c9d64e1a1d8d6dcd0b687ba16c6f4a40e02c1165eb18dad47f1f43c"
+      },
+      {
+        "derived_index": 4,
+        "source_index": 4,
+        "episode_id": "run_20260714_210830_00051",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210830_00051/run_20260714_210830_00051_0.mcap",
+        "size_bytes": 656099407,
+        "sha256": "b851c9f35e0cfa71c8d71f43b84bcca0bcb4418fda81e1d9631cae5c9d6df4be"
+      },
+      {
+        "derived_index": 5,
+        "source_index": 5,
+        "episode_id": "run_20260714_210537_00050",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210537_00050/run_20260714_210537_00050_0.mcap",
+        "size_bytes": 748310898,
+        "sha256": "68948f710e1b82fb17e376dbb5e78b3907debfdd085bfce102b10853c015192a"
+      },
+      {
+        "derived_index": 6,
+        "source_index": 6,
+        "episode_id": "run_20260714_210246_00048",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_210246_00048/run_20260714_210246_00048_0.mcap",
+        "size_bytes": 742447556,
+        "sha256": "1c129985e8ec718d060abdbd7de1cfe338d22503b22e0a6e2b72c20d510fa11e"
+      },
+      {
+        "derived_index": 7,
+        "source_index": 7,
+        "episode_id": "run_20260714_205904_00046",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205904_00046/run_20260714_205904_00046_0.mcap",
+        "size_bytes": 803290407,
+        "sha256": "2ef4ac59b2236cf5557b46db8dbdd831d73a2bec97f3381fac10440fd1e89b57"
+      },
+      {
+        "derived_index": 8,
+        "source_index": 8,
+        "episode_id": "run_20260714_205710_00044",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205710_00044/run_20260714_205710_00044_0.mcap",
+        "size_bytes": 849586248,
+        "sha256": "2a1903f47313cd739a1326abf5511d2564efffbf36432e80746ebb51c153364a"
+      },
+      {
+        "derived_index": 9,
+        "source_index": 9,
+        "episode_id": "run_20260714_205615_00043",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_205615_00043/run_20260714_205615_00043_0.mcap",
+        "size_bytes": 782790755,
+        "sha256": "a5320b3ca792cd9eab71883d42a1245f94c6ec6a3d4f3c188d34185c41d8c84d"
+      },
+      {
+        "derived_index": 10,
+        "source_index": 10,
+        "episode_id": "run_20260714_204910_00039",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204910_00039/run_20260714_204910_00039_0.mcap",
+        "size_bytes": 977913469,
+        "sha256": "7e9f8a9e9525164061e25f2181a1be76f584e87a6aa90199151f64e6a564effe"
+      },
+      {
+        "derived_index": 11,
+        "source_index": 11,
+        "episode_id": "run_20260714_204750_00038",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204750_00038/run_20260714_204750_00038_0.mcap",
+        "size_bytes": 740009857,
+        "sha256": "b3d4840daa89532ce982560e364eb51c3c821d4db0b21746159f65e6c4c97ffa"
+      },
+      {
+        "derived_index": 12,
+        "source_index": 12,
+        "episode_id": "run_20260714_204648_00037",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204648_00037/run_20260714_204648_00037_0.mcap",
+        "size_bytes": 805098852,
+        "sha256": "94b17c72838211abb6a6f4e6d9745089ff88d4a0ab3e5fd9408494ebcc2a2bd6"
+      },
+      {
+        "derived_index": 13,
+        "source_index": 13,
+        "episode_id": "run_20260714_204515_00035",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204515_00035/run_20260714_204515_00035_0.mcap",
+        "size_bytes": 537349035,
+        "sha256": "87ebe1438aa92de41936d315b50b3e310efbdd7874821131273f8adad8399702"
+      },
+      {
+        "derived_index": 14,
+        "source_index": 14,
+        "episode_id": "run_20260714_204409_00034",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_204409_00034/run_20260714_204409_00034_0.mcap",
+        "size_bytes": 714895710,
+        "sha256": "e46f048a99aff23ddcdf2b7643fea93a1043256f40420dd452896a58b727e2fd"
+      },
+      {
+        "derived_index": 15,
+        "source_index": 16,
+        "episode_id": "run_20260714_200716_00029",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_200716_00029/run_20260714_200716_00029_0.mcap",
+        "size_bytes": 941594644,
+        "sha256": "d5c56231c4f3df496b7412dae5db578274d10fe3f4f137e844da6ab26a3e3ad5"
+      },
+      {
+        "derived_index": 16,
+        "source_index": 17,
+        "episode_id": "run_20260714_200257_00027",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_200257_00027/run_20260714_200257_00027_0.mcap",
+        "size_bytes": 1197115502,
+        "sha256": "6694acc8013d553681943191b55fb7002afd57de201f3ddabc2abb8fcdc090f8"
+      },
+      {
+        "derived_index": 17,
+        "source_index": 18,
+        "episode_id": "run_20260714_194854_00025",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_194854_00025/run_20260714_194854_00025_0.mcap",
+        "size_bytes": 646824882,
+        "sha256": "3d59ecda50c46ee21d50760968ea32f2871cf9bcf7bc5707ae7aa4cf2e317da4"
+      },
+      {
+        "derived_index": 18,
+        "source_index": 19,
+        "episode_id": "run_20260714_194734_00024",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_194734_00024/run_20260714_194734_00024_0.mcap",
+        "size_bytes": 777995281,
+        "sha256": "ffcc8737b622f874a72b862157570115fccc911ee58acc062b34a14ebbe6e13c"
+      },
+      {
+        "derived_index": 19,
+        "source_index": 20,
+        "episode_id": "run_20260714_193528_00019",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_193528_00019/run_20260714_193528_00019_0.mcap",
+        "size_bytes": 448346425,
+        "sha256": "8e53f7fb52298aa1880a8d752382ac8175ef4bbaf1fdf2c0158b73d1251d16c4"
+      },
+      {
+        "derived_index": 20,
+        "source_index": 21,
+        "episode_id": "run_20260714_181728_00010",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_181728_00010/run_20260714_181728_00010_0.mcap",
+        "size_bytes": 514728973,
+        "sha256": "a718c68db291eca6980bc713a4084b663ab44bbd5182c87e87ccd356b41a6d0b"
+      },
+      {
+        "derived_index": 21,
+        "source_index": 23,
+        "episode_id": "run_20260714_165424_00006",
+        "path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_165424_00006/run_20260714_165424_00006_0.mcap",
+        "size_bytes": 526752549,
+        "sha256": "8aaa8d5a80138b7ff95920576781860b9bb5183384c7c9a6f68cd8667638fe19"
+      }
+    ]
+  },
+  "provenance": {
+    "scope_config": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/configs/data/franka_scope_22of25_v1.yaml",
+    "scope_config_sha256": "2dd95dcd5b9b953abd816d7863af1b38d92275923af884eadcbd07527273bd56",
+    "freeze_script": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/scripts/freeze_22of25_scope.py",
+    "freeze_script_sha256": "88ce9d785b5cca2dc534b22265edc9de419e1a64cf6cf1eab59a28f040feb9c4",
+    "d0_audit": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/raw_audit/d0_raw_audit.json",
+    "d0_audit_sha256": "e901400f9a2afbcec740a9f90fe533c0bb5065e420129407fd80f0ce092de43c",
+    "d1_contract": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/configs/data/franka_current_eef_contract_v1.yaml",
+    "d1_contract_sha256": "8b7c6832e17e946a77172fcf9d71f3338cc89970bb40a7166011cc5c4c6f6816",
+    "report": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/reports/D1_SCOPE_22OF25_V1.md",
+    "report_sha256": "450f0c260973c43af79c78302ff36569be06d77216fd75d7b835c4534793fc07"
+  },
+  "verification": {
+    "status": "PASS",
+    "source_hash_match": true,
+    "source_order_preserved": true,
+    "source_partition_exact": true,
+    "d0_missing_set_match": true,
+    "d0_size_match_for_all_included": true,
+    "full_mcap_sha256_computed": true,
+    "raw_files_modified": false
+  },
+  "gates": {
+    "d3_allowed": true,
+    "d3_scope_only": "franka_scope_22of25_v1",
+    "d3_input_manifest_only": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/manifests/frank3_train_passed_22of25_v1.yaml",
+    "original_25_episode_manifest_allowed_for_d3": false,
+    "real_robot_rollout_allowed": false,
+    "real_robot_requirement": "same_configured_EE_frame_and_TCP"
+  }
+}

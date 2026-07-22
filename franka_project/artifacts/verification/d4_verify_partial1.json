@@ -1,0 +1,584 @@
+{
+  "schema_version": 1,
+  "phase": "D4",
+  "status": "PASS_PARTIAL_SMOKE",
+  "generated_at_utc": "2026-07-15T12:48:55.556629+00:00",
+  "config": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/configs/data/franka_current_eef_conversion_22of25_v1.yaml",
+  "config_sha256": "b5694eca706c25999d957cc310c7117867cb85348caeeeeb8ba4d2a579988cb0",
+  "suffix": "_partial1",
+  "roots": {
+    "action15": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/.cache/d3_smoke/franka_current_eef_obs15_act15_v1_22of25_76b839b2_partial1",
+    "action30": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/.cache/d3_smoke/franka_current_eef_obs15_act30_v1_22of25_76b839b2_partial1"
+  },
+  "checks": [
+    {
+      "name": "action15.required_files",
+      "status": "PASS",
+      "details": {
+        "root": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/.cache/d3_smoke/franka_current_eef_obs15_act15_v1_22of25_76b839b2_partial1",
+        "missing": []
+      }
+    },
+    {
+      "name": "action15.episode_index_type",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.required_files",
+      "status": "PASS",
+      "details": {
+        "root": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/.cache/d3_smoke/franka_current_eef_obs15_act30_v1_22of25_76b839b2_partial1",
+        "missing": []
+      }
+    },
+    {
+      "name": "action30.episode_index_type",
+      "status": "PASS"
+    },
+    {
+      "name": "action15.info_counts",
+      "status": "PASS",
+      "details": {
+        "episodes": 1,
+        "main_rows": 586
+      }
+    },
+    {
+      "name": "action15.feature_keys",
+      "status": "PASS",
+      "details": {
+        "actual": [
+          "action",
+          "episode_index",
+          "frame_index",
+          "index",
+          "observation.images.camera1",
+          "observation.images.camera2",
+          "observation.state",
+          "task_index",
+          "timestamp"
+        ],
+        "expected": [
+          "action",
+          "episode_index",
+          "frame_index",
+          "index",
+          "observation.images.camera1",
+          "observation.images.camera2",
+          "observation.state",
+          "task_index",
+          "timestamp"
+        ]
+      }
+    },
+    {
+      "name": "action15.feature_schema",
+      "status": "PASS"
+    },
+    {
+      "name": "action15.profile_contract",
+      "status": "PASS"
+    },
+    {
+      "name": "action15.task_instruction",
+      "status": "PASS",
+      "details": [
+        {
+          "task_index": 0,
+          "task": "stack the cups"
+        }
+      ]
+    },
+    {
+      "name": "action15.episode_boundaries",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.info_counts",
+      "status": "PASS",
+      "details": {
+        "episodes": 1,
+        "main_rows": 586
+      }
+    },
+    {
+      "name": "action30.feature_keys",
+      "status": "PASS",
+      "details": {
+        "actual": [
+          "carrier.endpoint_15hz",
+          "episode_index",
+          "frame_index",
+          "index",
+          "observation.images.camera1",
+          "observation.images.camera2",
+          "observation.state",
+          "task_index",
+          "timestamp"
+        ],
+        "expected": [
+          "carrier.endpoint_15hz",
+          "episode_index",
+          "frame_index",
+          "index",
+          "observation.images.camera1",
+          "observation.images.camera2",
+          "observation.state",
+          "task_index",
+          "timestamp"
+        ]
+      }
+    },
+    {
+      "name": "action30.feature_schema",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.profile_contract",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.task_instruction",
+      "status": "PASS",
+      "details": [
+        {
+          "task_index": 0,
+          "task": "stack the cups"
+        }
+      ]
+    },
+    {
+      "name": "action30.episode_boundaries",
+      "status": "PASS"
+    },
+    {
+      "name": "cross_profile.metadata_counts_identity",
+      "status": "PASS",
+      "details": {
+        "action15": {
+          "episodes": 1,
+          "main_rows": 586
+        },
+        "action30": {
+          "episodes": 1,
+          "main_rows": 586
+        }
+      }
+    },
+    {
+      "name": "cross_profile.main_row_count",
+      "status": "PASS"
+    },
+    {
+      "name": "cross_profile.main_float32_bit_identity",
+      "status": "PASS",
+      "details": {
+        "rows": 586
+      }
+    },
+    {
+      "name": "cross_profile.default_columns_identity",
+      "status": "PASS"
+    },
+    {
+      "name": "main.default_column_semantics",
+      "status": "PASS"
+    },
+    {
+      "name": "cross_profile.episode_index_json_identity",
+      "status": "PASS"
+    },
+    {
+      "name": "episode_00.shared_sidecar_identity",
+      "status": "PASS",
+      "details": "run_20260714_212901_00063"
+    },
+    {
+      "name": "episode_00.anchor_map",
+      "status": "PASS",
+      "details": "run_20260714_212901_00063"
+    },
+    {
+      "name": "episode_00.qpos_audit",
+      "status": "PASS",
+      "details": {
+        "rows": 39118
+      }
+    },
+    {
+      "name": "episode_00.action30_timestamps",
+      "status": "PASS",
+      "details": {
+        "rows": 1172
+      }
+    },
+    {
+      "name": "episode_00.endpoint_float32_bit_identity",
+      "status": "PASS",
+      "details": {
+        "endpoints": 586
+      }
+    },
+    {
+      "name": "episode_00.valid_anchors_and_t_plus_1_t_plus_50",
+      "status": "PASS",
+      "details": {
+        "valid": 468,
+        "horizon": 50
+      }
+    },
+    {
+      "name": "episode_00.record_counts",
+      "status": "PASS"
+    },
+    {
+      "name": "sidecars.aggregate_counts",
+      "status": "PASS",
+      "details": {
+        "episodes": 1,
+        "common_camera_anchors": 587,
+        "main_rows": 586,
+        "valid_anchors": 468,
+        "action15_effective_stats_count": 23400,
+        "action30_carrier_rows": 1172,
+        "action30_effective_stats_count": 46800
+      }
+    },
+    {
+      "name": "partial_suffix_contract",
+      "status": "PASS",
+      "details": {
+        "suffix": "_partial1",
+        "episodes": 1
+      }
+    },
+    {
+      "name": "action15.standard_stats",
+      "status": "PASS"
+    },
+    {
+      "name": "action15.effective_pi0_stats",
+      "status": "PASS"
+    },
+    {
+      "name": "action15.normalization_roundtrip",
+      "status": "PASS",
+      "details": {
+        "standard_state": 2.7755575615628914e-17,
+        "standard_carrier": 2.7755575615628914e-17,
+        "effective_state": 2.7755575615628914e-17,
+        "effective_action": 0.0
+      }
+    },
+    {
+      "name": "action30.standard_stats",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.effective_pi0_stats",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.normalization_roundtrip",
+      "status": "PASS",
+      "details": {
+        "standard_state": 2.7755575615628914e-17,
+        "standard_carrier": 2.7755575615628914e-17,
+        "effective_state": 2.7755575615628914e-17,
+        "effective_action": 0.0
+      }
+    },
+    {
+      "name": "cross_profile.effective_state_stats_identity",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.carrier_sidecar_stats",
+      "status": "PASS"
+    },
+    {
+      "name": "cross_profile.monitor_file_identity",
+      "status": "PASS"
+    },
+    {
+      "name": "monitor.valid_training_anchor_subset",
+      "status": "PASS",
+      "details": {
+        "population": 468,
+        "sample": 47
+      }
+    },
+    {
+      "name": "monitor.provenance_hashes",
+      "status": "PASS"
+    },
+    {
+      "name": "action30.fail_fast_profile_marker",
+      "status": "PASS",
+      "details": {
+        "main_action_key": "carrier.endpoint_15hz",
+        "action_feature_present": false,
+        "requires_project_cartesian_adapter": true,
+        "requires_project_dual_rate_adapter": true,
+        "train_in_first_round": false
+      }
+    },
+    {
+      "name": "action15.lerobot_dataset_counts",
+      "status": "PASS",
+      "details": {
+        "frames": 586,
+        "episodes": 1
+      }
+    },
+    {
+      "name": "action15.random_and_boundary_video_decode",
+      "status": "PASS",
+      "details": {
+        "samples": 5,
+        "shape": [
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    {
+      "name": "action30.lerobot_dataset_counts",
+      "status": "PASS",
+      "details": {
+        "frames": 586,
+        "episodes": 1
+      }
+    },
+    {
+      "name": "action30.random_and_boundary_video_decode",
+      "status": "PASS",
+      "details": {
+        "samples": 5,
+        "shape": [
+          480,
+          640,
+          3
+        ]
+      }
+    },
+    {
+      "name": "cross_profile.decoded_video_bit_identity",
+      "status": "PASS",
+      "details": {
+        "comparisons": 10
+      }
+    },
+    {
+      "name": "video.raw_mcap_lossy_pixel_qa",
+      "status": "PASS",
+      "details": {
+        "codec_is_lossy": true,
+        "comparison_is_bit_exact": false,
+        "thresholds": {
+          "max_mae": 12.0,
+          "min_psnr_db": 25.0
+        },
+        "episodes_sampled": 1,
+        "comparisons": 6,
+        "mean_mae": 1.811515480324074,
+        "max_mae": 2.2364442274305554,
+        "min_psnr_db": 38.10214006370492,
+        "samples": [
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 0,
+            "global_row": 0,
+            "camera": "observation.images.camera1",
+            "mae": 2.027543402777778,
+            "psnr_db": 39.14726260509716
+          },
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 0,
+            "global_row": 0,
+            "camera": "observation.images.camera2",
+            "mae": 1.4546148003472221,
+            "psnr_db": 42.347066929346475
+          },
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 293,
+            "global_row": 293,
+            "camera": "observation.images.camera1",
+            "mae": 2.2364442274305554,
+            "psnr_db": 38.10214006370492
+          },
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 293,
+            "global_row": 293,
+            "camera": "observation.images.camera2",
+            "mae": 1.5850325520833333,
+            "psnr_db": 41.6666599731073
+          },
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 585,
+            "global_row": 585,
+            "camera": "observation.images.camera1",
+            "mae": 2.0905338541666665,
+            "psnr_db": 38.78342739166645
+          },
+          {
+            "episode_index": 0,
+            "raw_episode_id": "run_20260714_212901_00063",
+            "local_row": 585,
+            "global_row": 585,
+            "camera": "observation.images.camera2",
+            "mae": 1.474924045138889,
+            "psnr_db": 42.22648400558086
+          }
+        ]
+      }
+    }
+  ],
+  "counts": {
+    "episodes": 1,
+    "common_camera_anchors": 587,
+    "main_rows": 586,
+    "valid_anchors": 468,
+    "action15_effective_stats_count": 23400,
+    "action30_carrier_rows": 1172,
+    "action30_effective_stats_count": 46800
+  },
+  "stats": {
+    "action15": {
+      "standard_state_count": 586,
+      "standard_carrier_count": 586,
+      "effective_state_count": 468,
+      "effective_action_count": 23400,
+      "max_normalization_roundtrip_error": 2.7755575615628914e-17
+    },
+    "action30": {
+      "standard_state_count": 586,
+      "standard_carrier_count": 586,
+      "effective_state_count": 468,
+      "effective_action_count": 46800,
+      "max_normalization_roundtrip_error": 2.7755575615628914e-17
+    },
+    "action30_carrier_count": 1172
+  },
+  "monitor": {
+    "population_size": 468,
+    "sample_size": 47,
+    "logical_anchor_index_sha256": "3c3990701738537ab8ba7ed2bb41aa131e4c7c815a58ea9b38e2c9275908b79a",
+    "anchor_list_sha256": "2e06484519d66d284f6bc6867dce880fae071a4a67a55a3dae131a33347d6c16"
+  },
+  "action30_fail_fast_marker": {
+    "main_action_key": "carrier.endpoint_15hz",
+    "action_feature_present": false,
+    "requires_project_cartesian_adapter": true,
+    "requires_project_dual_rate_adapter": true,
+    "train_in_first_round": false
+  },
+  "video": {
+    "decode": {
+      "sample_indices": [
+        0,
+        118,
+        305,
+        497,
+        585
+      ],
+      "profiles": {
+        "action15": {
+          "decoded_samples": 5
+        },
+        "action30": {
+          "decoded_samples": 5
+        }
+      },
+      "cross_profile": {
+        "comparisons": 10,
+        "max_mae": 0.0,
+        "min_psnr_db": null,
+        "infinite_psnr_means_bit_exact": true
+      }
+    },
+    "raw_mcap_pixel_qa": {
+      "codec_is_lossy": true,
+      "comparison_is_bit_exact": false,
+      "thresholds": {
+        "max_mae": 12.0,
+        "min_psnr_db": 25.0
+      },
+      "episodes_sampled": 1,
+      "comparisons": 6,
+      "mean_mae": 1.811515480324074,
+      "max_mae": 2.2364442274305554,
+      "min_psnr_db": 38.10214006370492,
+      "samples": [
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 0,
+          "global_row": 0,
+          "camera": "observation.images.camera1",
+          "mae": 2.027543402777778,
+          "psnr_db": 39.14726260509716
+        },
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 0,
+          "global_row": 0,
+          "camera": "observation.images.camera2",
+          "mae": 1.4546148003472221,
+          "psnr_db": 42.347066929346475
+        },
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 293,
+          "global_row": 293,
+          "camera": "observation.images.camera1",
+          "mae": 2.2364442274305554,
+          "psnr_db": 38.10214006370492
+        },
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 293,
+          "global_row": 293,
+          "camera": "observation.images.camera2",
+          "mae": 1.5850325520833333,
+          "psnr_db": 41.6666599731073
+        },
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 585,
+          "global_row": 585,
+          "camera": "observation.images.camera1",
+          "mae": 2.0905338541666665,
+          "psnr_db": 38.78342739166645
+        },
+        {
+          "episode_index": 0,
+          "raw_episode_id": "run_20260714_212901_00063",
+          "local_row": 585,
+          "global_row": 585,
+          "camera": "observation.images.camera2",
+          "mae": 1.474924045138889,
+          "psnr_db": 42.22648400558086
+        }
+      ]
+    }
+  },
+  "outputs": {
+    "machine_report": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/verification/d4_verify_partial1.json",
+    "markdown_report": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/reports/D4_DATASET_VERIFICATION_PARTIAL1.md"
+  }
+}

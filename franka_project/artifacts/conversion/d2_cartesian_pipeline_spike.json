@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "phase": "D2_CARTESIAN_PIPELINE_SPIKE",
+  "phase_status": "PASS",
+  "generated_at_utc": "2026-07-15T11:02:53.632878+00:00",
+  "scope": {
+    "episode_ids": [
+      "run_20260714_212901_00063",
+      "run_20260714_211745_00057"
+    ],
+    "episode_count": 2,
+    "image_conversion_performed": false,
+    "full_dataset_conversion_performed": false,
+    "training_performed": false
+  },
+  "inputs": {
+    "config_path": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/configs/data/franka_current_eef_common_v1.yaml",
+    "manifest_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/manifests/train_passed.yaml",
+    "manifest_sha256": "d2ba4dc819eafd0163ed6673f53ea6e6cc7d492b075978c4db925c5b68dcf38b",
+    "config_sha256": {
+      "configs/data/franka_current_eef_common_v1.yaml": "1d9c23d8c54aed8a0870c37d5dfc26aab95164f65c041a67a781cbe923cc4d1a",
+      "configs/data/franka_current_eef_obs15_act15_v1.yaml": "f8393a12e2e09f1bbdba08daa912b0fba35efa2141ee10eed93fe8695d4165e7",
+      "configs/data/franka_current_eef_obs15_act30_v1.yaml": "e34edeb2da5dab63be23e55b4162c2a07fcf42bf3cb10790e0ecac623524c944"
+    },
+    "combined_config_sha256": "bdfc3eeaab65e47d64d171a1a0fad77657691a13a81baed8eaf2d9a9a6a22300",
+    "source_code_sha256": {
+      "scripts/run_cartesian_spike.py": "2229e81e53cb1318e430c49a7c637eafe7241e3e9ac7422b9b21afe6e4e604f2",
+      "src/franka_eef_pipeline/__init__.py": "e29f0ad4454430616a14d3eb2a04c5005e6fd22037f834acb264bca667b82255",
+      "src/franka_eef_pipeline/action_chunk.py": "79e74f54add41ed16eabddbbc299d5f80e26424ebbd91360ddcb42c46afd6462",
+      "src/franka_eef_pipeline/audit.py": "fce3cd50eddf897df1404e0f678c727641e35d555b639eeefc4c1bc33d7cd993",
+      "src/franka_eef_pipeline/geometry.py": "ea536e595109d89c43661f1851f33825a6c6767065958aa512178c46bdf11df0",
+      "src/franka_eef_pipeline/mcap_reader.py": "e2c52b4b1827e09ea9b8696b66a4a429eb7dcb82a6517ca68fe025079d9a0acb",
+      "src/franka_eef_pipeline/stats.py": "e6fe5b09bec38f5bc29337a9336c82da24920db10d2637f014690f502d562269"
+    },
+    "pipeline_source_sha256": "bbd0aa8d575de622a65bb604ab60a3936e61d6fc27d977eae701d1021d937e41",
+    "raw_mcap_sha256": {
+      "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211745_00057/run_20260714_211745_00057_0.mcap": "3ee49e6af9fac1fff6b9dd776c899e15d62b8705330909f318d453e5c1586256",
+      "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063/run_20260714_212901_00063_0.mcap": "2f18a79f8b457e57e8e4e905d3ac343d308c0a395fa3d7a905ed098e02427f82"
+    },
+    "raw_mcap_size_bytes": {
+      "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063/run_20260714_212901_00063_0.mcap": 1124850283,
+      "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211745_00057/run_20260714_211745_00057_0.mcap": 797216205
+    },
+    "source_dataset_sha256": "55d353d52b54c0b7f84e96b91946a577b069d97cc6d3ac56a01a9f0fb417c426"
+  },
+  "contract": {
+    "task_instruction": "stack the cups",
+    "timestamp_source": "mcap_log_time_ns",
+    "alignment_strategy": "latest_not_after",
+    "common_interval_required_streams": [
+      "cam1",
+      "cam2",
+      "eef",
+      "gripper"
+    ],
+    "zero_fill_missing_camera": false,
+    "state_dimension": 10,
+    "action_dimension": 7,
+    "horizon_camera_intervals": 50,
+    "action15_chunk_size": 50,
+    "action30_chunk_size": 100
+  },
+  "episodes": [
+    {
+      "episode_id": "run_20260714_212901_00063",
+      "mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063/run_20260714_212901_00063_0.mcap",
+      "mcap_sha256": "2f18a79f8b457e57e8e4e905d3ac343d308c0a395fa3d7a905ed098e02427f82",
+      "common_start_ns": 1784035751704801451,
+      "common_end_ns": 1784035790820717607,
+      "camera_anchor_count": 587,
+      "full_horizon_candidate_count": 537,
+      "valid_action15_anchor_count": 468,
+      "valid_action30_anchor_count": 468,
+      "first_valid_anchor": 0,
+      "last_valid_anchor": 536,
+      "action15_chunk_shape": [
+        468,
+        50,
+        7
+      ],
+      "action30_chunk_shape": [
+        468,
+        100,
+        7
+      ],
+      "endpoint_max_abs_difference": 0.0,
+      "full_horizon_checks": {
+        "action15_first_is_t_plus_1": true,
+        "action15_last_is_t_plus_50": true,
+        "action30_first_is_interval_midpoint": true,
+        "action30_last_is_t_plus_50": true,
+        "all_action_sources_are_causal": true,
+        "no_cross_episode_or_padded_target": true
+      },
+      "action15_geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 3.6500241499888574e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.9799781784902742,
+        "so3_theta_p50_rad": 0.15001044229060456,
+        "so3_theta_p95_rad": 0.4232329062127617,
+        "so3_theta_p99_rad": 0.6012966932689502
+      },
+      "action30_geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 4.2146848510894035e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.9817077859823582,
+        "so3_theta_p50_rad": 0.14958833032687058,
+        "so3_theta_p95_rad": 0.42313616134117227,
+        "so3_theta_p99_rad": 0.6010334260372457
+      }
+    },
+    {
+      "episode_id": "run_20260714_211745_00057",
+      "mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_211745_00057/run_20260714_211745_00057_0.mcap",
+      "mcap_sha256": "3ee49e6af9fac1fff6b9dd776c899e15d62b8705330909f318d453e5c1586256",
+      "common_start_ns": 1784035078521051241,
+      "common_end_ns": 1784035105618005379,
+      "camera_anchor_count": 406,
+      "full_horizon_candidate_count": 356,
+      "valid_action15_anchor_count": 356,
+      "valid_action30_anchor_count": 356,
+      "first_valid_anchor": 0,
+      "last_valid_anchor": 355,
+      "action15_chunk_shape": [
+        356,
+        50,
+        7
+      ],
+      "action30_chunk_shape": [
+        356,
+        100,
+        7
+      ],
+      "endpoint_max_abs_difference": 0.0,
+      "full_horizon_checks": {
+        "action15_first_is_t_plus_1": true,
+        "action15_last_is_t_plus_50": true,
+        "action30_first_is_interval_midpoint": true,
+        "action30_last_is_t_plus_50": true,
+        "all_action_sources_are_causal": true,
+        "no_cross_episode_or_padded_target": true
+      },
+      "action15_geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 5.16191365590357e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.5595830264360533,
+        "so3_theta_p50_rad": 0.057196708523526305,
+        "so3_theta_p95_rad": 0.5096090153722614,
+        "so3_theta_p99_rad": 0.5457226030692442
+      },
+      "action30_geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 5.16191365590357e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.5604533231194577,
+        "so3_theta_p50_rad": 0.05682621388117772,
+        "so3_theta_p95_rad": 0.5085948606182734,
+        "so3_theta_p99_rad": 0.5456529139754535
+      }
+    }
+  ],
+  "profiles": {
+    "action15": {
+      "observation_fps": 15,
+      "action_fps": 15,
+      "chunk_size": 50,
+      "anchor_count": 824,
+      "observation_state_shape": [
+        824,
+        10
+      ],
+      "action_chunk_shape": [
+        824,
+        50,
+        7
+      ],
+      "effective_state_stat_count": 824,
+      "effective_action_stat_count": 41200,
+      "geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 5.16191365590357e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.9799781784902742,
+        "so3_theta_p50_rad": 0.15001044229060456,
+        "so3_theta_p95_rad": 0.5096090153722614,
+        "so3_theta_p99_rad": 0.6012966932689502
+      },
+      "normalization_roundtrip": {
+        "observation_state_max_abs_error": 8.326672684688674e-17,
+        "action_max_abs_error": 1.1102230246251565e-16
+      },
+      "stats_sha256": "9cee026439f60de0adaa509428facdfcd7e343800761db5921a446bb1b7c5b5c",
+      "stats_output": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/stats/pi0_eef_stats_spike_action15.json"
+    },
+    "action30": {
+      "observation_fps": 15,
+      "action_fps": 30,
+      "chunk_size": 100,
+      "anchor_count": 824,
+      "observation_state_shape": [
+        824,
+        10
+      ],
+      "action_chunk_shape": [
+        824,
+        100,
+        7
+      ],
+      "effective_state_stat_count": 824,
+      "effective_action_stat_count": 82400,
+      "geometry_roundtrip": {
+        "position_max_error_m": 0.0,
+        "rotation_max_geodesic_error_rad": 5.16191365590357e-08,
+        "gripper_max_abs_error": 0.0,
+        "so3_theta_max_rad": 0.9817077859823582,
+        "so3_theta_p50_rad": 0.14958833032687058,
+        "so3_theta_p95_rad": 0.5085948606182734,
+        "so3_theta_p99_rad": 0.6010334260372457
+      },
+      "normalization_roundtrip": {
+        "observation_state_max_abs_error": 8.326672684688674e-17,
+        "action_max_abs_error": 1.1102230246251565e-16
+      },
+      "stats_sha256": "e4253e35d03e494fd37d726c59ee330b8a8d8dcfd25ba18c05275c4be0f2c13d",
+      "stats_output": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/stats/pi0_eef_stats_spike_action30.json"
+    }
+  },
+  "checks": {
+    "status": "PASS",
+    "full_horizon_without_padding": true,
+    "action15_first_is_t_plus_1": true,
+    "action15_last_is_t_plus_50": true,
+    "action30_first_is_interval_midpoint": true,
+    "action30_last_is_t_plus_50": true,
+    "all_action_sources_are_causal": true,
+    "dual_rate_valid_anchor_sets_equal": true,
+    "action30_endpoint_value_identity": true,
+    "action30_endpoint_timestamp_identity": true,
+    "all_model_arrays_finite": true,
+    "all_effective_stats_finite": true,
+    "geometry_encode_decode": true,
+    "so3_branch_margin": true,
+    "normalization_roundtrip": true,
+    "thresholds": {
+      "position_error_m": 1e-06,
+      "rotation_error_rad": 1e-05,
+      "gripper_error": 1e-12,
+      "so3_branch_margin_rad": 0.1,
+      "normalization_error": 1e-10
+    }
+  },
+  "outputs": {
+    "machine_json": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/conversion/d2_cartesian_pipeline_spike.json",
+    "stats_action15": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/stats/pi0_eef_stats_spike_action15.json",
+    "stats_action30": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/stats/pi0_eef_stats_spike_action30.json",
+    "markdown_report": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/reports/D2_CARTESIAN_PIPELINE_SPIKE.md"
+  }
+}

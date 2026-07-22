@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-07-15T10:43:38.899796+00:00",
+  "config_path": "franka_project/configs/data/franka_current_eef_common_v1.yaml",
+  "config_sha256": "1d9c23d8c54aed8a0870c37d5dfc26aab95164f65c041a67a781cbe923cc4d1a",
+  "manifest_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/manifests/train_passed.yaml",
+  "manifest_sha256": "d2ba4dc819eafd0163ed6673f53ea6e6cc7d492b075978c4db925c5b68dcf38b",
+  "timestamp_source": "mcap_log_time_ns",
+  "alignment_thresholds_ms": {
+    "cam2": 100.0,
+    "eef": 50.0,
+    "gripper": 10.0,
+    "qpos_audit": 10.0
+  },
+  "gripper_mapping": {
+    "joint_name": "robotiq_85_left_knuckle_joint",
+    "raw_open": 0.0,
+    "raw_closed": 0.8,
+    "normalized_open": 0.0,
+    "normalized_closed": 1.0,
+    "clip": true
+  },
+  "aggregate": {
+    "episode_count": 1,
+    "raw_cam1_frames": 588,
+    "raw_cam2_frames": 587,
+    "common_camera_anchors": 587,
+    "valid_observations": 583,
+    "invalid_observations": 4,
+    "valid_action15_anchors": 468,
+    "valid_action30_anchors": 468,
+    "alignment_age_ms": {
+      "cam2": {
+        "count": 587,
+        "min": 21.999246,
+        "mean": 35.75584544804089,
+        "p50": 35.092839999999995,
+        "p90": 35.5972952,
+        "p95": 45.328077,
+        "p99": 45.91696278,
+        "max": 168.264221
+      },
+      "eef": {
+        "count": 587,
+        "min": 0.023094,
+        "mean": 16.03309995229983,
+        "p50": 14.490765999999999,
+        "p90": 30.410255799999998,
+        "p95": 31.956125999999994,
+        "p99": 33.01364889999999,
+        "max": 33.221309999999995
+      },
+      "gripper": {
+        "count": 587,
+        "min": 0.021766,
+        "mean": 1.0278947938671208,
+        "p50": 1.035032,
+        "p90": 1.8092511999999998,
+        "p95": 1.9089459999999994,
+        "p99": 2.01392546,
+        "max": 2.117496
+      },
+      "qpos_audit": {
+        "count": 587,
+        "min": 0.008792,
+        "mean": 0.549668073253833,
+        "p50": 0.554796,
+        "p90": 0.9544996,
+        "p95": 1.0126574999999998,
+        "p99": 1.11360468,
+        "max": 1.6647049999999999
+      }
+    },
+    "gripper_raw": {
+      "count": 19650,
+      "min": 0.0,
+      "mean": 0.2727127693445875,
+      "p50": 0.0,
+      "p90": 0.7859140969162995,
+      "p95": 0.7859140969162995,
+      "p99": 0.7859140969162995,
+      "max": 0.7859140969162995
+    },
+    "quaternion_norm": {
+      "count": 1177,
+      "min": 0.9999999849424346,
+      "mean": 0.9999999953039531,
+      "p50": 0.9999999954123538,
+      "p90": 1.000000000092005,
+      "p95": 1.0000000013529005,
+      "p99": 1.0000000032897858,
+      "max": 1.000000007181158
+    },
+    "eef_frame_ids": [
+      "base"
+    ],
+    "joint_name_orders": [
+      [
+        "fr3_joint1",
+        "fr3_joint2",
+        "fr3_joint3",
+        "fr3_joint4",
+        "fr3_joint5",
+        "fr3_joint6",
+        "fr3_joint7"
+      ]
+    ],
+    "gripper_name_orders": [
+      [
+        "robotiq_85_left_knuckle_joint"
+      ]
+    ]
+  },
+  "conclusions": [
+    "公共有效区间按 cam1/cam2/EEF/gripper 起止覆盖裁剪，未使用零图 fallback。",
+    "15 Hz 与 30 Hz carrier 的 endpoint value/source timestamp 全量交叉对账通过。",
+    "EEF frame_id 集合为 ['base']；joint/gripper name order 在 JSON 中逐条记录。",
+    "配置阈值下共有 4 个 observation 因 source 过旧而无效。",
+    "15/30 Hz 有效 full-horizon anchor 集合数量一致。"
+  ],
+  "episodes": [
+    {
+      "episode_id": "run_20260714_212901_00063",
+      "mcap_path": "/ytech_milm/collect_data_103/frank3/20260714/DATA/run_20260714_212901_00063/run_20260714_212901_00063_0.mcap",
+      "mcap_size_bytes": 1124850283,
+      "manifest_duration_s": 39.308,
+      "streams": {
+        "cam1": {
+          "count": 588,
+          "span_s": 39.151046017,
+          "mean_hz": 14.993213712479493,
+          "dt_median_ms": 66.708061,
+          "dt_max_ms": 78.321655,
+          "header_to_log_ms": {
+            "count": 588,
+            "min": 60.035951,
+            "mean": 64.45283687244898,
+            "p50": 63.765531499999994,
+            "p90": 66.6375217,
+            "p95": 73.34644064999999,
+            "p99": 75.77584580999999,
+            "max": 77.17338699999999
+          },
+          "frame_ids": [
+            "camera1_color_optical_frame"
+          ],
+          "header_timestamp_missing": 0,
+          "header_timestamp_non_monotonic": 0
+        },
+        "cam2": {
+          "count": 587,
+          "span_s": 39.217944703,
+          "mean_hz": 14.942139483285404,
+          "dt_median_ms": 66.72023150000001,
+          "dt_max_ms": 210.172624,
+          "header_to_log_ms": {
+            "count": 587,
+            "min": 65.059551,
+            "mean": 66.60683778534923,
+            "p50": 65.472031,
+            "p90": 66.0814972,
+            "p95": 75.57051139999999,
+            "p99": 76.78413608,
+            "max": 209.285497
+          },
+          "frame_ids": [
+            "camera2_color_optical_frame"
+          ],
+          "header_timestamp_missing": 0,
+          "header_timestamp_non_monotonic": 0
+        },
+        "eef": {
+          "count": 1177,
+          "span_s": 39.171861022,
+          "mean_hz": 30.021550401690792,
+          "dt_median_ms": 33.33375149999999,
+          "dt_max_ms": 35.882107000000005,
+          "header_to_log_ms": {
+            "count": 1177,
+            "min": 0.037691999999999996,
+            "mean": 0.5730406380628716,
+            "p50": 0.55084,
+            "p90": 0.9463574,
+            "p95": 1.0018010000000002,
+            "p99": 1.0624856,
+            "max": 28.247004999999998
+          },
+          "frame_ids": [
+            "base"
+          ],
+          "header_timestamp_missing": 0,
+          "header_timestamp_non_monotonic": 0
+        },
+        "gripper": {
+          "count": 19650,
+          "span_s": 39.307939285,
+          "mean_hz": 499.87357153312036,
+          "dt_median_ms": 1.998831,
+          "dt_max_ms": 5.1419999999999995,
+          "header_to_log_ms": {
+            "count": 19650,
+            "min": 0.016588,
+            "mean": 0.07672835129770991,
+            "p50": 0.060282,
+            "p90": 0.09593020000000005,
+            "p95": 0.1273125,
+            "p99": 0.5196347399999867,
+            "max": 3.2271539999999996
+          },
+          "frame_ids": [
+            "base_link"
+          ],
+          "header_timestamp_missing": 0,
+          "header_timestamp_non_monotonic": 0
+        },
+        "qpos": {
+          "count": 39118,
+          "span_s": 39.198614119,
+          "mean_hz": 997.9179335587673,
+          "dt_median_ms": 0.999406,
+          "dt_max_ms": 5.502562,
+          "header_to_log_ms": {
+            "count": 39118,
+            "min": 0.014032,
+            "mean": 0.05489796170560867,
+            "p50": 0.0381195,
+            "p90": 0.0688923,
+            "p95": 0.09576855000000002,
+            "p99": 0.4708230800000045,
+            "max": 4.553348
+          },
+          "frame_ids": [
+            "base_link"
+          ],
+          "header_timestamp_missing": 0,
+          "header_timestamp_non_monotonic": 0
+        }
+      },
+      "manifest_count_match": {
+        "cam1": true,
+        "cam2": true,
+        "eef": true,
+        "gripper": true,
+        "qpos": true
+      },
+      "image": {
+        "cam1_shapes": [
+          "480x640"
+        ],
+        "cam2_shapes": [
+          "480x640"
+        ],
+        "cam1_encodings": [
+          "rgb8"
+        ],
+        "cam2_encodings": [
+          "rgb8"
+        ]
+      },
+      "common_interval": {
+        "start_ns": 1784035751704801451,
+        "end_ns": 1784035790820717607,
+        "duration_s": 39.115916156,
+        "cam1_count": 587,
+        "cam1_trimmed_prefix": 0,
+        "cam1_trimmed_suffix": 1,
+        "observation_valid_count": 583,
+        "observation_invalid_count": 4
+      },
+      "alignment_age_ms": {
+        "cam2": {
+          "count": 587,
+          "min": 21.999246,
+          "mean": 35.75584544804089,
+          "p50": 35.092839999999995,
+          "p90": 35.5972952,
+          "p95": 45.328077,
+          "p99": 45.91696278,
+          "max": 168.264221
+        },
+        "eef": {
+          "count": 587,
+          "min": 0.023094,
+          "mean": 16.03309995229983,
+          "p50": 14.490765999999999,
+          "p90": 30.410255799999998,
+          "p95": 31.956125999999994,
+          "p99": 33.01364889999999,
+          "max": 33.221309999999995
+        },
+        "gripper": {
+          "count": 587,
+          "min": 0.021766,
+          "mean": 1.0278947938671208,
+          "p50": 1.035032,
+          "p90": 1.8092511999999998,
+          "p95": 1.9089459999999994,
+          "p99": 2.01392546,
+          "max": 2.117496
+        },
+        "qpos_audit": {
+          "count": 587,
+          "min": 0.008792,
+          "mean": 0.549668073253833,
+          "p50": 0.554796,
+          "p90": 0.9544996,
+          "p95": 1.0126574999999998,
+          "p99": 1.11360468,
+          "max": 1.6647049999999999
+        },
+        "action30_midpoint_eef": {
+          "count": 586,
+          "min": 0.149273,
+          "mean": 16.19423604095563,
+          "p50": 14.4701285,
+          "p90": 30.48681,
+          "p95": 32.209126,
+          "p99": 33.129484999999995,
+          "max": 35.120374999999996
+        },
+        "action30_midpoint_gripper": {
+          "count": 586,
+          "min": 9.4e-05,
+          "mean": 0.9872914744027305,
+          "p50": 0.9638395,
+          "p90": 1.8040319999999999,
+          "p95": 1.88639575,
+          "p99": 2.0315420499999997,
+          "max": 4.744447
+        }
+      },
+      "eef": {
+        "finite": true,
+        "frame_ids": [
+          "base"
+        ],
+        "quaternion_norm": {
+          "count": 1177,
+          "min": 0.9999999849424346,
+          "mean": 0.9999999953039531,
+          "p50": 0.9999999954123538,
+          "p90": 1.000000000092005,
+          "p95": 1.0000000013529005,
+          "p99": 1.0000000032897858,
+          "max": 1.000000007181158
+        },
+        "quaternion_max_abs_norm_error": 1.505756541675396e-08,
+        "adjacent_raw_negative_dot_count": 0,
+        "position_min": [
+          0.3108174204826355,
+          -0.3860763609409332,
+          0.19837628304958344
+        ],
+        "position_max": [
+          0.6227222084999084,
+          0.02019689418375492,
+          0.35413241386413574
+        ]
+      },
+      "gripper": {
+        "finite": true,
+        "names": [
+          "robotiq_85_left_knuckle_joint"
+        ],
+        "raw": {
+          "count": 19650,
+          "min": 0.0,
+          "mean": 0.2727127693445875,
+          "p50": 0.0,
+          "p90": 0.7859140969162995,
+          "p95": 0.7859140969162995,
+          "p99": 0.7859140969162995,
+          "max": 0.7859140969162995
+        },
+        "normalized": {
+          "count": 19650,
+          "min": 0.0,
+          "mean": 0.34089096168073435,
+          "p50": 0.0,
+          "p90": 0.9823926211453744,
+          "p95": 0.9823926211453744,
+          "p99": 0.9823926211453744,
+          "max": 0.9823926211453744
+        }
+      },
+      "qpos": {
+        "finite": true,
+        "names": [
+          "fr3_joint1",
+          "fr3_joint2",
+          "fr3_joint3",
+          "fr3_joint4",
+          "fr3_joint5",
+          "fr3_joint6",
+          "fr3_joint7"
+        ],
+        "min": [
+          -0.2625080943107605,
+          -0.39374011754989624,
+          -0.6503559947013855,
+          -2.604706287384033,
+          -0.6764692068099976,
+          1.4878166913986206,
+          -0.4898439645767212
+        ],
+        "max": [
+          0.2846125662326813,
+          0.695638120174408,
+          -0.16524362564086914,
+          -1.2215938568115234,
+          0.3326709270477295,
+          2.4667680263519287,
+          0.41752660274505615
+        ]
+      },
+      "profiles": {
+        "action15": {
+          "carrier_rows": 586,
+          "valid_anchors": 468
+        },
+        "action30": {
+          "carrier_rows": 1172,
+          "valid_anchors": 468
+        },
+        "valid_anchor_sets_equal": true,
+        "endpoint_crosscheck": true
+      }
+    }
+  ]
+}

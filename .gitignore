@@ -177,3 +177,5 @@ outputs/
 *.xml
 !franka_project/ros2_ws/src/lerobot_franka_interfaces/package.xml
 *.part
+
+output_lerobot/

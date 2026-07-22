@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "phase": "PI0_FULL_TRAINING_PREFLIGHT",
+  "status": "PASS",
+  "generated_at_utc": "2026-07-15T13:03:13Z",
+  "scope": "strict local checkpoint load and official processor construction only",
+  "training_started": false,
+  "checkpoint_saved": false,
+  "hub_upload": false,
+  "wandb_run_created": false,
+  "checkpoint": {
+    "repo_id": "lerobot/pi0_base",
+    "local_snapshot_revision": "25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "local_snapshot_path": "/ytech_milm_intern/tujiahang/.cache/huggingface/hub/models--lerobot--pi0_base/snapshots/25c379b52ba2ff8788cab921758a3cc3fe3f77f2",
+    "config_sha256": "700c59d206885faff307d63272558fb9ad9a6b9feecdae55626ed9e3f594feb9",
+    "weights_size_bytes": 14005618584,
+    "weights_namespace": "pi0_core_unprefixed",
+    "strict": true,
+    "missing_keys": [],
+    "unexpected_keys": [],
+    "resolved_checkpoint_aliases": {
+      "paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight": "paligemma_with_expert.paligemma.lm_head.weight"
+    },
+    "verified_tensor": {
+      "checkpoint_key": "action_in_proj.bias",
+      "model_key": "model.action_in_proj.bias",
+      "shape": [
+        1024
+      ],
+      "checkpoint_dtype": "torch.float32",
+      "model_dtype": "torch.float32",
+      "checkpoint_tensor_sha256": "4c06cfc44340a7c14bfb617544fb6c49a6ee2feeba78dc02fc4418c6423c6dd6",
+      "exact_after_model_dtype_cast": true
+    }
+  },
+  "config_contract": {
+    "canonical_image_slots": [
+      "observation.images.base_0_rgb",
+      "observation.images.left_wrist_0_rgb",
+      "observation.images.right_wrist_0_rgb"
+    ],
+    "state_dim": 10,
+    "action_dim": 7,
+    "max_state_dim": 32,
+    "max_action_dim": 32,
+    "dtype": "bfloat16",
+    "gradient_checkpointing": true,
+    "freeze_vision_encoder": false,
+    "train_expert_only": false,
+    "use_relative_actions": false,
+    "use_peft": false,
+    "push_to_hub": false
+  },
+  "parameters": {
+    "parameter_tensor_count": 778,
+    "total_parameters": 4028019472,
+    "trainable_parameters": 4028019472,
+    "trainable_fraction": 1.0,
+    "lora_parameter_count": 0,
+    "gradient_checkpointing_enabled": true
+  },
+  "effective_stats": {
+    "note": "D2 spike stats used only for processor-construction smoke; formal training must use the final D3/D4 action15 stats",
+    "source": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/artifacts/stats/pi0_eef_stats_spike_action15.json",
+    "sha256_canonical_prepared": "7792575ea9b9a41fe938b80720d448f747c4ea706d0f857c6de7e3d7da22ef2a",
+    "injected_feature_keys": [
+      "observation.state",
+      "action"
+    ],
+    "dimensions": {
+      "observation.state": 10,
+      "action": 7
+    },
+    "counts": {
+      "observation.state": 824,
+      "action": 41200
+    }
+  },
+  "processors": {
+    "factory": "lerobot.policies.pi0.processor_pi0.make_pi0_pre_post_processors",
+    "preprocessor_steps": [
+      "RenameObservationsProcessorStep",
+      "AddBatchDimensionProcessorStep",
+      "Pi0NewLineProcessor",
+      "TokenizerProcessorStep",
+      "DeviceProcessorStep",
+      "RelativeActionsProcessorStep",
+      "NormalizerProcessorStep"
+    ],
+    "postprocessor_steps": [
+      "UnnormalizerProcessorStep",
+      "AbsoluteActionsProcessorStep",
+      "DeviceProcessorStep"
+    ]
+  },
+  "performance": {
+    "device": "cuda:1",
+    "gpu": "NVIDIA A800-SXM4-80GB",
+    "elapsed_seconds": 144.36224783957005,
+    "gpu_max_memory_allocated_bytes": 22901433856,
+    "gpu_max_memory_allocated_gib": 21.33,
+    "gpu_max_memory_reserved_bytes": 23420993536,
+    "gpu_max_memory_reserved_gib": 21.81,
+    "gpu_memory_released_after_smoke": true
+  },
+  "diagnostic_history": {
+    "first_attempt": "FAIL_CLOSED",
+    "first_attempt_error": "single missing current-model key: paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight",
+    "resolution": "accept only the canonical shape-checked lm_head to embed_tokens alias already used by upstream PI0Policy key fixing; all other missing/unexpected keys remain fatal",
+    "second_attempt": "PASS"
+  },
+  "implementation": {
+    "helper": "franka_project/src/franka_eef_pipeline/pi0_training.py",
+    "helper_sha256": "9e80a8e540ba61c0b2aeffe0cbf5ac52d0af141841aaea5ce970f3925b5bdca9",
+    "tests": "franka_project/tests/test_pi0_training.py",
+    "tests_sha256": "092560493f726f27bbff140039bbd6c1c2444d0905163e58fa6b11ba3ef53973",
+    "project_test_result": "55 passed, 1 external deprecation warning"
+  }
+}
