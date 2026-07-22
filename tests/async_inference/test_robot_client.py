@@ -73,30 +73,6 @@ def robot_client():
 # -----------------------------------------------------------------------------
 
 
-def test_remote_policy_specs_include_protocol_and_fps(robot_client):
-    from lerobot.async_inference.helpers import ASYNC_INFERENCE_PROTOCOL_VERSION
-
-    assert robot_client.policy_config.protocol_version == ASYNC_INFERENCE_PROTOCOL_VERSION
-    assert robot_client.policy_config.fps == robot_client.config.fps
-
-
-def test_policy_setup_ack_must_confirm_current_wire_contract(robot_client):
-    from lerobot.async_inference.helpers import ASYNC_INFERENCE_PROTOCOL_VERSION
-    from lerobot.transport import services_pb2
-
-    robot_client._validate_policy_setup_ack(
-        services_pb2.PolicySetupAck(
-            protocol_version=ASYNC_INFERENCE_PROTOCOL_VERSION,
-            fps=robot_client.config.fps,
-            policy_type=robot_client.policy_config.policy_type,
-            actions_per_chunk=robot_client.policy_config.actions_per_chunk,
-        )
-    )
-
-    with pytest.raises(RuntimeError, match="synchronize client/server"):
-        robot_client._validate_policy_setup_ack(services_pb2.PolicySetupAck())
-
-
 def _make_actions(start_ts: float, start_t: int, count: int):
     """Generate `count` consecutive TimedAction objects starting at timestep `start_t`."""
     from lerobot.async_inference.helpers import TimedAction

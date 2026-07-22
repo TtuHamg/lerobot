@@ -107,7 +107,7 @@ class FrankaRos(Robot):
 
     @check_if_not_connected
     def get_qpos(self):
-        """Return the seven-joint sideband without changing canonical Franka state10."""
+        """Return the seven-joint ROS sideband without changing PI0 state10."""
 
         if not isinstance(self._backend, Ros2Backend):
             raise RuntimeError("qpos sideband is only available in ROS2 interface mode")

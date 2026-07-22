@@ -404,7 +404,7 @@ class RosObservationSnapshot:
         return self.as_policy_observation()
 
     def as_sideband(self) -> dict[str, Any]:
-        """Return monitoring data excluded from the canonical Franka feature contract."""
+        """Return monitoring data excluded from the current PI0 feature contract."""
 
         return {
             "anchor_stamp_ns": self.anchor_stamp_ns,

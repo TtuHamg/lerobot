@@ -68,7 +68,6 @@ from lerobot.utils.import_utils import register_third_party_plugins
 
 from .configs import RobotClientConfig
 from .helpers import (
-    ASYNC_INFERENCE_PROTOCOL_VERSION,
     Action,
     FPSTracker,
     Observation,
@@ -103,13 +102,12 @@ class RobotClient:
         self.server_address = config.server_address
 
         self.policy_config = RemotePolicyConfig(
-            policy_type=config.policy_type,
-            pretrained_name_or_path=config.pretrained_name_or_path,
-            lerobot_features=lerobot_features,
-            actions_per_chunk=config.actions_per_chunk,
-            device=config.policy_device,
-            rename_map=config.rename_map,
-            fps=config.fps,
+            config.policy_type,
+            config.pretrained_name_or_path,
+            lerobot_features,
+            config.actions_per_chunk,
+            config.policy_device,
+            config.rename_map,
         )
         self.channel = grpc.insecure_channel(
             self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
@@ -175,55 +173,15 @@ class RobotClient:
                 f"Actions per chunk: {self.policy_config.actions_per_chunk}"
             )
 
-            setup_ack = self.stub.SendPolicyInstructions(policy_setup)
-            self._validate_policy_setup_ack(setup_ack)
+            self.stub.SendPolicyInstructions(policy_setup)
 
             self.shutdown_event.clear()
 
             return True
 
-        except (grpc.RpcError, RuntimeError, TypeError, ValueError) as e:
-            self.shutdown_event.set()
+        except grpc.RpcError as e:
             self.logger.error(f"Failed to connect to policy server: {e}")
             return False
-
-    def _validate_policy_setup_ack(self, ack: services_pb2.PolicySetupAck) -> None:
-        """Fail closed unless the server confirms the resolved wire contract."""
-
-        if not isinstance(ack, services_pb2.PolicySetupAck):
-            raise TypeError(f"Unexpected policy setup response type: {type(ack)}")
-
-        mismatches = []
-        if ack.protocol_version != ASYNC_INFERENCE_PROTOCOL_VERSION:
-            mismatches.append(
-                f"protocol server={ack.protocol_version} client={ASYNC_INFERENCE_PROTOCOL_VERSION}"
-            )
-        if ack.fps != self.config.fps:
-            mismatches.append(f"fps server={ack.fps} client={self.config.fps}")
-
-        requested_policy = self.policy_config.policy_type
-        if requested_policy is None:
-            if not ack.policy_type:
-                mismatches.append("server returned an empty policy_type")
-        elif ack.policy_type != requested_policy:
-            mismatches.append(
-                f"policy_type server={ack.policy_type!r} client={requested_policy!r}"
-            )
-
-        requested_chunk = self.policy_config.actions_per_chunk
-        if requested_chunk is None:
-            if ack.actions_per_chunk <= 0:
-                mismatches.append("server returned a non-positive actions_per_chunk")
-        elif ack.actions_per_chunk != requested_chunk:
-            mismatches.append(
-                f"actions_per_chunk server={ack.actions_per_chunk} client={requested_chunk}"
-            )
-
-        if mismatches:
-            raise RuntimeError(
-                "Policy setup acknowledgement mismatch; synchronize client/server checkouts: "
-                + "; ".join(mismatches)
-            )
 
     def stop(self):
         """Stop the robot client"""

@@ -145,7 +145,7 @@ class Ros2Backend:
         return self.get_snapshot().as_policy_observation()
 
     def get_qpos(self) -> np.ndarray:
-        """Return the seven-joint sideband, excluded from canonical Franka state10."""
+        """Return the canonical seven-joint sideband, excluded from PI0 state10."""
 
         return self.get_snapshot().qpos
 

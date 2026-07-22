@@ -197,8 +197,6 @@ def test_action_chunk_ros_message_preserves_metadata_and_remaining_ttl(
         joint_state_type=object,
         pose_type=_FakePose,
         action_chunk_type=_FakeActionMessage,
-        action_chunk_ack_type=object,
-        gateway_status_type=object,
     )
 
     received_ns = 10_000

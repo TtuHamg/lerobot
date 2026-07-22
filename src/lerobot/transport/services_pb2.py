@@ -23,15 +23,15 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n lerobot/transport/services.proto\x12\ttransport\"L\n\nTransition\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"L\n\nParameters\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"T\n\x12InteractionMessage\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"M\n\x0bObservation\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"V\n\x07\x41\x63tions\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x03 \x01(\t\x12\x17\n\x0fsource_timestep\x18\x04 \x01(\x03\"R\n\x11\x41\x63tionDeliveryAck\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x17\n\x0fsource_timestep\x18\x03 \x01(\x03\"\x1b\n\x0bPolicySetup\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\"g\n\x0ePolicySetupAck\x12\x18\n\x10protocol_version\x18\x01 \x01(\r\x12\x0b\n\x03\x66ps\x18\x02 \x01(\r\x12\x13\n\x0bpolicy_type\x18\x03 \x01(\t\x12\x19\n\x11\x61\x63tions_per_chunk\x18\x04 \x01(\r\"\x07\n\x05\x45mpty*`\n\rTransferState\x12\x14\n\x10TRANSFER_UNKNOWN\x10\x00\x12\x12\n\x0eTRANSFER_BEGIN\x10\x01\x12\x13\n\x0fTRANSFER_MIDDLE\x10\x02\x12\x10\n\x0cTRANSFER_END\x10\x03\x32\x81\x02\n\x0eLearnerService\x12=\n\x10StreamParameters\x12\x10.transport.Empty\x1a\x15.transport.Parameters0\x01\x12<\n\x0fSendTransitions\x12\x15.transport.Transition\x1a\x10.transport.Empty(\x01\x12\x45\n\x10SendInteractions\x12\x1d.transport.InteractionMessage\x1a\x10.transport.Empty(\x01\x12+\n\x05Ready\x12\x10.transport.Empty\x1a\x10.transport.Empty2\xbc\x02\n\x0e\x41syncInference\x12>\n\x10SendObservations\x12\x16.transport.Observation\x1a\x10.transport.Empty(\x01\x12\x32\n\nGetActions\x12\x10.transport.Empty\x1a\x12.transport.Actions\x12<\n\nAckActions\x12\x1c.transport.ActionDeliveryAck\x1a\x10.transport.Empty\x12K\n\x16SendPolicyInstructions\x12\x16.transport.PolicySetup\x1a\x19.transport.PolicySetupAck\x12+\n\x05Ready\x12\x10.transport.Empty\x1a\x10.transport.Emptyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n lerobot/transport/services.proto\x12\ttransport\"L\n\nTransition\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"L\n\nParameters\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"T\n\x12InteractionMessage\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"M\n\x0bObservation\x12\x30\n\x0etransfer_state\x18\x01 \x01(\x0e\x32\x18.transport.TransferState\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"V\n\x07\x41\x63tions\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x03 \x01(\t\x12\x17\n\x0fsource_timestep\x18\x04 \x01(\x03\"R\n\x11\x41\x63tionDeliveryAck\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\t\x12\x17\n\x0fsource_timestep\x18\x03 \x01(\x03\"\x1b\n\x0bPolicySetup\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\"\x07\n\x05\x45mpty*`\n\rTransferState\x12\x14\n\x10TRANSFER_UNKNOWN\x10\x00\x12\x12\n\x0eTRANSFER_BEGIN\x10\x01\x12\x13\n\x0fTRANSFER_MIDDLE\x10\x02\x12\x10\n\x0cTRANSFER_END\x10\x03\x32\x81\x02\n\x0eLearnerService\x12=\n\x10StreamParameters\x12\x10.transport.Empty\x1a\x15.transport.Parameters0\x01\x12<\n\x0fSendTransitions\x12\x15.transport.Transition\x1a\x10.transport.Empty(\x01\x12\x45\n\x10SendInteractions\x12\x1d.transport.InteractionMessage\x1a\x10.transport.Empty(\x01\x12+\n\x05Ready\x12\x10.transport.Empty\x1a\x10.transport.Empty2\xb3\x02\n\x0e\x41syncInference\x12>\n\x10SendObservations\x12\x16.transport.Observation\x1a\x10.transport.Empty(\x01\x12\x32\n\nGetActions\x12\x10.transport.Empty\x1a\x12.transport.Actions\x12<\n\nAckActions\x12\x1c.transport.ActionDeliveryAck\x1a\x10.transport.Empty\x12\x42\n\x16SendPolicyInstructions\x12\x16.transport.PolicySetup\x1a\x10.transport.Empty\x12+\n\x05Ready\x12\x10.transport.Empty\x1a\x10.transport.Emptyb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'lerobot.transport.services_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_TRANSFERSTATE']._serialized_start=683
-  _globals['_TRANSFERSTATE']._serialized_end=779
+  _globals['_TRANSFERSTATE']._serialized_start=578
+  _globals['_TRANSFERSTATE']._serialized_end=674
   _globals['_TRANSITION']._serialized_start=47
   _globals['_TRANSITION']._serialized_end=123
   _globals['_PARAMETERS']._serialized_start=125
@@ -46,12 +46,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_ACTIONDELIVERYACK']._serialized_end=538
   _globals['_POLICYSETUP']._serialized_start=540
   _globals['_POLICYSETUP']._serialized_end=567
-  _globals['_POLICYSETUPACK']._serialized_start=569
-  _globals['_POLICYSETUPACK']._serialized_end=672
-  _globals['_EMPTY']._serialized_start=674
-  _globals['_EMPTY']._serialized_end=681
-  _globals['_LEARNERSERVICE']._serialized_start=782
-  _globals['_LEARNERSERVICE']._serialized_end=1039
-  _globals['_ASYNCINFERENCE']._serialized_start=1042
-  _globals['_ASYNCINFERENCE']._serialized_end=1358
+  _globals['_EMPTY']._serialized_start=569
+  _globals['_EMPTY']._serialized_end=576
+  _globals['_LEARNERSERVICE']._serialized_start=677
+  _globals['_LEARNERSERVICE']._serialized_end=934
+  _globals['_ASYNCINFERENCE']._serialized_start=937
+  _globals['_ASYNCINFERENCE']._serialized_end=1244
 # @@protoc_insertion_point(module_scope)

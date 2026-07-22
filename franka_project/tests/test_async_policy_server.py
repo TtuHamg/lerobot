@@ -209,7 +209,6 @@ def _client_specs(features: dict[str, dict], *, rename_map: dict[str, str] | Non
         actions_per_chunk=2,
         device="cpu",
         rename_map=FRANKA_RENAME_MAP if rename_map is None else rename_map,
-        fps=15,
     )
 
 
@@ -495,9 +494,6 @@ def test_checkpoint_preflight_rejects_same_size_content_corruption(tmp_path: Pat
 
 
 def test_strict_load_uses_project_loader_and_sets_eval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    import franka_eef_pipeline.pi0_training as pi0_training_module
-    import lerobot.policies.pi0.modeling_pi0 as pi0_modeling_module
-
     checkpoint = _write_checkpoint_envelope(tmp_path)
     calls: list[tuple[str, object]] = []
 
@@ -513,18 +509,18 @@ def test_strict_load_uses_project_loader_and_sets_eval(tmp_path: Path, monkeypat
 
     config = object()
     monkeypatch.setattr(
-        pi0_training_module,
+        async_server_module,
         "build_pi0_full_finetune_config",
         lambda path, *, device: calls.append(("config", (path, device))) or config,
     )
-    monkeypatch.setattr(pi0_modeling_module, "PI0Policy", DummyPolicy)
+    monkeypatch.setattr(async_server_module, "PI0Policy", DummyPolicy)
     monkeypatch.setattr(
-        pi0_training_module,
+        async_server_module,
         "canonicalize_pi0_full_training_graph",
         lambda policy: calls.append(("canonicalize", policy)),
     )
     monkeypatch.setattr(
-        pi0_training_module,
+        async_server_module,
         "load_pi0_full_checkpoint_weights",
         lambda policy, path: calls.append(("weights", (policy, path))) or {"project_manifest_present": True},
     )

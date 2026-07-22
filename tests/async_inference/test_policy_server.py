@@ -169,7 +169,6 @@ def test_server_policy_config_overrides_client_policy_config():
         lerobot_features={},
         actions_per_chunk=None,
         device=None,
-        fps=server.config.fps,
     )
 
     resolved = server._resolve_policy_specs(client_specs)
@@ -192,30 +191,9 @@ def test_server_policy_config_falls_back_to_client():
         lerobot_features={},
         actions_per_chunk=20,
         device="cpu",
-        fps=server.config.fps,
     )
 
     assert server._resolve_policy_specs(client_specs) == client_specs
-
-
-def test_server_rejects_legacy_or_mismatched_remote_protocol() -> None:
-    from lerobot.async_inference.configs import PolicyServerConfig
-    from lerobot.async_inference.helpers import RemotePolicyConfig
-    from lerobot.async_inference.policy_server import PolicyServer
-
-    server = PolicyServer(PolicyServerConfig())
-    client_specs = RemotePolicyConfig(
-        policy_type="act",
-        pretrained_name_or_path="/client/model",
-        lerobot_features={},
-        actions_per_chunk=20,
-        device="cpu",
-        fps=server.config.fps,
-    )
-    del vars(client_specs)["protocol_version"]
-
-    with pytest.raises(ValueError, match="protocol mismatch"):
-        server._resolve_policy_specs(client_specs)
 
 
 def test_maybe_enqueue_observation_must_go(policy_server):
