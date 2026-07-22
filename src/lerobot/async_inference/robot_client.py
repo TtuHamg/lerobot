@@ -24,6 +24,7 @@ python src/lerobot/async_inference/robot_client.py \
     --server_address=127.0.0.1:8080 \
     --client_device=cpu \
     --chunk_size_threshold=0.5 \
+    --action_offset=1 \
     --enable_pending_observation=True \
     --pending_observation_timeout_s=2.0 \
     --aggregate_fn_name=weighted_average \
@@ -523,6 +524,16 @@ class RobotClient:
         action = {key: action_tensor[i].item() for i, key in enumerate(self.robot.action_features)}
         return action
 
+    def _next_observation_timestep(self, latest_action: int) -> int:
+        """Label a new observation relative to the latest locally consumed action.
+
+        With ``action_offset=1``, the server numbers its first predicted action
+        at ``latest_action + 1``. This removes the fixed overlap with the action
+        that has already been consumed while preserving the existing stale
+        filter for actions that genuinely expire during inference.
+        """
+        return max(int(latest_action) + self.config.action_offset, 0)
+
     def control_loop_action(self, verbose: bool = False) -> dict[str, Any]:
         """Reading and performing actions in local queue"""
 
@@ -606,7 +617,7 @@ class RobotClient:
             observation = TimedObservation(
                 timestamp=time.time(),  # need time.time() to compare timestamps across client and server
                 observation=raw_observation,
-                timestep=max(latest_action, 0),
+                timestep=self._next_observation_timestep(latest_action),
             )
 
             obs_capture_time = time.perf_counter() - start_time

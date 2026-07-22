@@ -220,6 +220,7 @@ python -m lerobot.async_inference.robot_client \
   --policy_device=cpu \
   --client_device=cpu \
   --actions_per_chunk=50 \
+  --action_offset=1 \
   --fps=15 \
   --chunk_size_threshold=0.5 \
   --aggregate_fn_name=latest_only \
@@ -227,6 +228,12 @@ python -m lerobot.async_inference.robot_client \
   --pending_observation_timeout_s=10 \
   '--rename_map={"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}'
 ```
+
+`action_offset` 是 RobotClient 顶层参数，默认 `0` 以兼容旧行为。这里显式设置为 `1`，使新
+observation 使用 `max(latest_action + 1, 0)` 作为 timestep，PolicyServer 的首条 action 因而
+从下一 timestep 开始编号。若等待 action 返回期间 `latest_action` 不推进，50-step response
+可完整保留；若 cursor 同期推进了 `m` 步，仍会裁剪前 `m` 条真正 stale action，所以这不是
+无条件的 50 条保证。该选项不改变 pending retry、gRPC ACK 或 ROS safety gateway 协议。
 
 这里的 `pretrained_name_or_path=server-owned` 只是满足 client 配置；server CLI 中的真实
 checkpoint 路径具有优先级。插件只接受 exact 10D state、两路 `480×640×3 uint8` 图像和

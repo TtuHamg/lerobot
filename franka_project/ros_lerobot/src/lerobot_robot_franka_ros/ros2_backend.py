@@ -32,6 +32,10 @@ class _Ros2Runtime(Protocol):
 
     def publish_action_chunk(self, chunk: AbsoluteActionChunk) -> None: ...
 
+    def get_plan_execution_state(
+        self, session_id: str, plan_id: int, *, status_freshness_ns: int
+    ) -> Any: ...
+
     def close(self, *, timeout_s: float | None = None) -> None: ...
 
 
@@ -96,6 +100,10 @@ class Ros2Backend:
         self._session_id: str | None = None
         self._next_plan_id = 0
         self._last_bookkept_action: RobotAction | None = None
+        # (plan_id, waypoint_count, period_ns, published_monotonic_ns) of the
+        # newest published plan; used to gate the next observation on the
+        # gateway's real execution progress.
+        self._last_published_plan: tuple[int, int, int, int] | None = None
         self._lock = threading.RLock()
 
     @property
@@ -245,7 +253,64 @@ class Ros2Backend:
             )
             runtime.publish_action_chunk(chunk)
             self._next_plan_id += 1
+            self._last_published_plan = (
+                plan_id,
+                len(timesteps),
+                chunk.period_ns,
+                int(self._monotonic_ns()),
+            )
         return chunk
+
+    def plan_execution_complete(self) -> bool:
+        """True when the newest published plan no longer gates a fresh observation.
+
+        The stock client replaces plans on its own nominal clock. When the
+        gateway retimes execution below real time, that clock runs ahead and
+        every replacement starts with a catch-up jump. This check aligns the
+        next observation with the gateway's actual progress instead.
+
+        Fail-open on every abnormal path (no ack, stale status, disarmed
+        gateway, missing runtime): the gateway rejects unsafe plans itself, so
+        blocking the observation stream can only add deadlock risk.
+        """
+
+        with self._lock:
+            last = self._last_published_plan
+            session_id = self._session_id
+        if last is None or session_id is None:
+            return True
+        runtime = self._runtime
+        if runtime is None or not runtime.is_running:
+            return True
+        plan_id, waypoint_count, period_ns, published_ns = last
+
+        elapsed_ns = int(self._monotonic_ns()) - published_ns
+        state = runtime.get_plan_execution_state(
+            session_id,
+            plan_id,
+            status_freshness_ns=_NS_PER_SECOND,
+        )
+        if state is None:
+            # No ack yet: wait briefly for the gateway round trip, then fail open.
+            return elapsed_ns > _NS_PER_SECOND
+        if not state.accepted:
+            return True
+        if not state.status_fresh or not state.armed:
+            return True
+        if state.status_plan_matches:
+            if not state.has_active_plan:
+                return True
+            if state.applied_waypoint_index >= waypoint_count - 1:
+                return True
+        elif elapsed_ns > waypoint_count * period_ns:
+            # The status no longer references this plan although its nominal
+            # duration has passed: it completed (or was superseded) between
+            # 10 Hz status samples.
+            return True
+        # Absolute ceiling: nominal duration times the gateway's maximum
+        # retiming scale (8), plus settle margin. Beyond this something is
+        # wedged and the observation stream must not deadlock.
+        return elapsed_ns > 8 * waypoint_count * period_ns + 2 * _NS_PER_SECOND
 
     def disconnect(self) -> None:
         with self._lock:
