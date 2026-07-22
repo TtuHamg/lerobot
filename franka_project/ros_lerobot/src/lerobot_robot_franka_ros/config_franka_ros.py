@@ -25,6 +25,9 @@ class FrankaRosConfig(RobotConfig):
     ros2_interface_only: bool = True
     ros2_node_name: str = "lerobot_franka_interface"
     action_chunk_topic: str = "/lerobot/franka/action_chunk"
+    # Maximum number of fresh actions committed to both the local queue and a
+    # single ROS action chunk. ``None`` preserves the complete fresh suffix.
+    max_action_chunk_waypoints: int | None = None
     camera1_topic: str = "/camera1/camera1/color/image_raw"
     camera2_topic: str = "/camera2/camera2/color/image_raw"
     eef_pose_topic: str = "/franka_robot_state_broadcaster/current_pose"
@@ -85,6 +88,12 @@ class FrankaRosConfig(RobotConfig):
             raise ValueError("ROS topic names must be distinct")
         if not self.action_chunk_topic.startswith("/lerobot/"):
             raise ValueError("action_chunk_topic must stay under the isolated /lerobot/ namespace")
+        if self.max_action_chunk_waypoints is not None and (
+            isinstance(self.max_action_chunk_waypoints, bool)
+            or not isinstance(self.max_action_chunk_waypoints, Integral)
+            or self.max_action_chunk_waypoints <= 0
+        ):
+            raise ValueError("max_action_chunk_waypoints must be a positive integer or None")
         if (
             not isinstance(self.ros2_node_name, str)
             or not self.ros2_node_name

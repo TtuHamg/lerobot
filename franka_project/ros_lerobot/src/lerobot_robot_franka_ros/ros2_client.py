@@ -124,6 +124,11 @@ class FrankaRos2RobotClient(RobotClient):
         # replacement starts with a catch-up jump.
         return self.robot.plan_execution_complete()
 
+    def _effective_action_chunk_size(self, incoming_actions: list[TimedAction]) -> int:
+        received_size = super()._effective_action_chunk_size(incoming_actions)
+        limit = self.config.robot.max_action_chunk_waypoints
+        return received_size if limit is None else min(received_size, limit)
+
     def _aggregate_action_queues(self, incoming_actions, aggregate_fn=None):
         if not isinstance(incoming_actions, list):
             raise TypeError("Incoming action chunk must be a list")
@@ -132,18 +137,28 @@ class FrankaRos2RobotClient(RobotClient):
 
         with self.latest_action_lock:
             latest_action = self.latest_action
-        accepted_actions = [
+        fresh_actions = [
             action for action in incoming_actions if action.get_timestep() > latest_action
         ]
+        limit = self.config.robot.max_action_chunk_waypoints
+        accepted_actions = fresh_actions if limit is None else fresh_actions[:limit]
         # Every action in a server chunk is timed from the observation used for
         # inference. Preserve that original provenance even when an already
         # executed prefix is removed before publishing the fresh suffix.
         source_timestep = incoming_actions[0].get_timestep() if incoming_actions else None
         source_timestamp = incoming_actions[0].get_timestamp() if incoming_actions else None
 
-        # Preserve the stock queue semantics first. With latest_only, the
-        # accepted incoming values are exactly the replacements ROS2 should see.
-        super()._aggregate_action_queues(incoming_actions, aggregate_fn)
+        # The local cursor must never consume a waypoint that was intentionally
+        # withheld from ROS. Commit the exact same bounded fresh prefix to both
+        # the stock local queue and the complete-chunk publisher.
+        super()._aggregate_action_queues(accepted_actions, aggregate_fn)
+
+        if len(accepted_actions) < len(fresh_actions):
+            self.logger.info(
+                "Limited fresh action chunk from %d to %d waypoints before local queue and ROS publication",
+                len(fresh_actions),
+                len(accepted_actions),
+            )
 
         if accepted_actions:
             try:

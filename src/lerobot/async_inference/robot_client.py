@@ -377,6 +377,16 @@ class RobotClient:
         self.logger.debug(f"Queue size: {queue_size}, Queue contents: {timestamps}")
         return queue_size, timestamps
 
+    def _effective_action_chunk_size(self, incoming_actions: list[TimedAction]) -> int:
+        """Return the nominal queue capacity represented by an incoming chunk.
+
+        Subclasses that intentionally commit only a bounded subset of a server
+        response can override this so ``chunk_size_threshold`` is normalized by
+        the number of actions the local queue can actually retain.
+        """
+
+        return len(incoming_actions)
+
     def _aggregate_action_queues(
         self,
         incoming_actions: list[TimedAction],
@@ -489,7 +499,10 @@ class RobotClient:
                 else:
                     self.logger.debug(f"Actions kept on device: {client_device}")
 
-                self.action_chunk_size = max(self.action_chunk_size, len(timed_actions))
+                effective_action_chunk_size = self._effective_action_chunk_size(timed_actions)
+                if effective_action_chunk_size <= 0:
+                    raise ValueError("Effective action chunk size must be positive")
+                self.action_chunk_size = max(self.action_chunk_size, effective_action_chunk_size)
 
                 # Calculate network latency if we have matching observations
                 if len(timed_actions) > 0 and verbose:

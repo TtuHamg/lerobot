@@ -54,6 +54,7 @@ def test_ros2_client_cli_help_is_parseable_without_ros() -> None:
     assert "--action_offset" in result.stdout
     assert "--robot.ros2_interface_only" in result.stdout
     assert "--robot.action_chunk_topic" in result.stdout
+    assert "--robot.max_action_chunk_waypoints" in result.stdout
 
 
 class _ManualClock:
@@ -90,11 +91,12 @@ class _FakeRuntime:
         self.closed = True
 
 
-def _ros2_config(tmp_path) -> FrankaRosConfig:
+def _ros2_config(tmp_path, **kwargs) -> FrankaRosConfig:
     return FrankaRosConfig(
         id="ros2-test",
         calibration_dir=tmp_path / "calibration",
         dry_run=False,
+        **kwargs,
     )
 
 
@@ -220,6 +222,19 @@ def test_franka_client_profile_requires_frozen_base_frame(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="frame 'base'"):
         resolve_franka_client_policy_config(config)
+
+
+@pytest.mark.parametrize("limit", [None, 1, 30, 50])
+def test_max_action_chunk_waypoints_config_accepts_positive_values(tmp_path, limit) -> None:
+    config = _ros2_config(tmp_path, max_action_chunk_waypoints=limit)
+
+    assert config.max_action_chunk_waypoints == limit
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5])
+def test_max_action_chunk_waypoints_config_rejects_invalid_values(tmp_path, limit) -> None:
+    with pytest.raises(ValueError, match="max_action_chunk_waypoints"):
+        _ros2_config(tmp_path, max_action_chunk_waypoints=limit)
 
 
 def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
@@ -396,7 +411,11 @@ def _bare_chunk_client(robot: _FakeChunkRobot) -> FrankaRos2RobotClient:
     client.action_queue = Queue()
     client.action_queue_size = []
     client.shutdown_event = threading.Event()
-    client.config = SimpleNamespace(environment_dt=1.0 / 15.0, action_offset=0)
+    client.config = SimpleNamespace(
+        environment_dt=1.0 / 15.0,
+        action_offset=0,
+        robot=SimpleNamespace(max_action_chunk_waypoints=None),
+    )
     client.logger = logging.getLogger("test-franka-ros2-client")
     return client
 
@@ -473,6 +492,57 @@ def test_action_offset_one_still_discards_actions_that_expire_during_inference()
     assert len(published) == 49
     assert [action.timestep for action in published] == list(range(6, 55))
     assert metadata["source_observation_timestep"] == 5
+
+
+def test_client_limits_fifty_fresh_actions_to_thirty_for_local_queue_and_ros() -> None:
+    robot = _FakeChunkRobot()
+    client = _bare_chunk_client(robot)
+    client.config.action_offset = 1
+    client.config.robot.max_action_chunk_waypoints = 30
+    first_timestep = client._next_observation_timestep(client.latest_action)
+    incoming = _timed_chunk(timestep=first_timestep, count=50)
+
+    assert client._effective_action_chunk_size(incoming) == 30
+
+    client._aggregate_action_queues(incoming, lambda _old, new: new)
+
+    published, metadata = robot.calls[0]
+    expected_timesteps = list(range(5, 35))
+    assert [action.timestep for action in published] == expected_timesteps
+    assert [action.timestep for action in client.action_queue.queue] == expected_timesteps
+    assert metadata["source_observation_timestep"] == 5
+    assert metadata["source_observation_timestamp"] == incoming[0].timestamp
+
+
+def test_client_drops_stale_prefix_before_applying_waypoint_limit() -> None:
+    robot = _FakeChunkRobot()
+    client = _bare_chunk_client(robot)
+    client.config.robot.max_action_chunk_waypoints = 30
+    incoming = _timed_chunk(timestep=4, count=50)
+    client.latest_action = 9
+
+    client._aggregate_action_queues(incoming, lambda _old, new: new)
+
+    published, metadata = robot.calls[0]
+    expected_timesteps = list(range(10, 40))
+    assert [action.timestep for action in published] == expected_timesteps
+    assert [action.timestep for action in client.action_queue.queue] == expected_timesteps
+    assert metadata["source_observation_timestep"] == 4
+
+
+def test_client_waypoint_limit_does_not_pad_short_fresh_suffix() -> None:
+    robot = _FakeChunkRobot()
+    client = _bare_chunk_client(robot)
+    client.config.robot.max_action_chunk_waypoints = 30
+    incoming = _timed_chunk(timestep=4, count=50)
+    client.latest_action = 39
+
+    client._aggregate_action_queues(incoming, lambda _old, new: new)
+
+    published, _metadata = robot.calls[0]
+    expected_timesteps = list(range(40, 54))
+    assert [action.timestep for action in published] == expected_timesteps
+    assert [action.timestep for action in client.action_queue.queue] == expected_timesteps
 
 
 def test_client_hook_fails_closed_when_chunk_publication_fails() -> None:

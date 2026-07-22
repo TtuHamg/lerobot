@@ -472,10 +472,11 @@ timestep <= latest_action
 
 的 stale prefix，然后：
 
-1. 使用 stock `latest_only` 更新本地 queue；
-2. 保留原始 source observation timestep/timestamp；
-3. 把 fresh suffix 作为一个完整 ROS chunk 发布一次；
-4. ROS 转换或 publish 失败时设置 client shutdown，不降级为逐 waypoint publish。
+1. 可选地取前 `robot.max_action_chunk_waypoints` 个 fresh action；
+2. 使用这同一份 accepted actions 更新 stock 本地 queue；
+3. 保留原始 source observation timestep/timestamp；
+4. 把 accepted actions 作为一个完整 ROS chunk 发布一次；
+5. ROS 转换或 publish 失败时设置 client shutdown，不降级为逐 waypoint publish。
 
 Absolute quaternion 不能使用逐元素 `weighted_average`，因此必须使用 `latest_only`。
 
@@ -487,6 +488,19 @@ Absolute quaternion 不能使用逐元素 `weighted_average`，因此必须使�
   这 `m` 条；
 - 因此 offset 解决的是固定首项与 `latest_action` 重叠造成的 49/50，不是“任何时延下固定
   发布 50 条”的承诺。
+
+`robot.max_action_chunk_waypoints` 默认是 `None`。例如同时使用：
+
+```bash
+--actions_per_chunk=50
+--robot.max_action_chunk_waypoints=30
+```
+
+Server/PI0 合同仍是 50-step output，gRPC payload 仍携带 50 条；Client 在 stale filter 之后
+只保留最前面的最多 30 条，并让本地 queue、`latest_action` 账本和 ROS publication 保持同一
+范围。若只有 24 条仍 fresh，就只发布 24 条。传输 ACK 仍确认整个 50-action delivery 已按
+配置完成处理，被明确裁掉的尾部不会被 Server 再发。有效 queue threshold 分母同步为 30，
+但健康且 armed 时仍需 Gateway 完成整个 30 点计划后才允许下一 observation。
 
 Pending transport retry 会复用原 observation、偏移后的 timestep 和 `request_id`，不会按新的
 cursor 再算一次。Action delivery ACK 的去重/重发状态机、ROS `CartesianActionChunk` wire

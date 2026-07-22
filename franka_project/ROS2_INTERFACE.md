@@ -313,9 +313,10 @@ GetActions
   -> stock receive_actions device handling
   -> FrankaRos2RobotClient._aggregate_action_queues()
        1. 丢弃 timestep <= latest_action 的 stale prefix
-       2. 保留原始 source observation 元数据
-       3. 调用 stock latest_only queue aggregation
-       4. 将 accepted fresh actions 作为一个完整 chunk 发布一次
+       2. 可选地截取前 max_action_chunk_waypoints 个 fresh actions
+       3. 保留原始 source observation 元数据
+       4. 用同一份 accepted actions 替换 stock 本地 queue
+       5. 将 accepted actions 作为一个完整 ROS chunk 发布一次
   -> stock control loop 逐点 pop，仅更新 bookkeeping
 ```
 
@@ -345,6 +346,18 @@ cursor 又推进了 `m` 步，前 `m` 条仍属于真正 stale action，会按�
 因此 ROS 看到的是本地 client 接受后的 fresh suffix，不是包含已执行 stale prefix
 的原始 server payload。如果 chunk 转换/发布失败，client 立即设置 shutdown event
 并重新抛出异常；不 fallback 为逐 waypoint ROS 发布。
+
+`robot.max_action_chunk_waypoints` 是 Franka ROS2 专属的可选上限，默认 `None`，即保留
+完整 fresh suffix。配置为 `30` 时，Server 仍可按 `--actions_per_chunk=50` 生成并发送
+50 条；Client 先去掉 stale prefix，再取最靠近当前 observation 的前 30 条 fresh action。
+这同一份最多 30 条的数据既替换本地 action queue，也发布到 ROS，避免 `latest_action`
+消费 Gateway 从未收到的尾部 waypoint。若 fresh suffix 本来不足 30 条，则不会补齐。
+
+gRPC action-delivery ACK 仍确认整个 Server delivery 已按 Client 配置完成 commit；被上限明确
+丢弃的尾部不会稍后重发。用于 `chunk_size_threshold` 的有效 chunk size 也同步按 30
+归一化。健康且 armed 的 Gateway 下，下一次 observation 仍受
+`plan_execution_complete()` 门控：30 点在 15 Hz 下名义执行约 2 秒，并不会因为 threshold
+达到 0.5 就在第 15 点自动开始下一次推理。
 
 不得把 `aggregate_fn_name` 改成 `weighted_average`：absolute quaternion 不能做逐元素线性平均。
 
@@ -450,6 +463,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.id=franka_ros2_interface \
   --robot.dry_run=false \
   --robot.ros2_interface_only=true \
+  --robot.max_action_chunk_waypoints=30 \
   --robot.base_frame=base \
   --task='stack the cups' \
   --policy_type=pi0 \
@@ -509,6 +523,11 @@ ros2 topic echo --once /lerobot/franka/action_chunk
 
 预期只出现 5 个 observation subscriptions 和 1 个 `/lerobot/franka/action_chunk` publisher。
 不应出现 controller command publisher、action client 或 hardware service call。
+
+需要把 action chunk、Gateway ACK/status 和过滤后的 Controller applied feedback 按本次运行
+时间分目录、分文件保存时，使用
+[`LEROBOT_ROS_LOGGING.md`](./LEROBOT_ROS_LOGGING.md) 中的 recorder。它同时区分
+`--actions_per_chunk` 配置值与 ROS 实际 waypoint 数，且不会订阅 `/franka/safe_joint_command`。
 
 ## 10. 当前未实现，必须保留到后续阶段的事项
 

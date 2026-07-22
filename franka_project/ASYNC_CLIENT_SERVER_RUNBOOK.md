@@ -301,6 +301,11 @@ observation 使用 `max(latest_action + 1, 0)` 作为 timestep，PolicyServer �
 可完整保留；若 cursor 同期推进了 `m` 步，仍会裁剪前 `m` 条真正 stale action，所以这不是
 无条件的 50 条保证。该选项不改变 pending retry、gRPC ACK 或 ROS safety gateway 协议。
 
+实际 ROS2 client 若需要保持 Server/checkpoint 的 50-step 合同、但每次只提交最多 30 个
+waypoint，可额外设置 `--robot.max_action_chunk_waypoints=30`。该选项只在专用
+`lerobot_robot_franka_ros.ros2_client` 入口生效，并同时限制本地有效 queue 与 ROS chunk；
+不能仅截断 publisher。完整时序和 ACK 语义见 [`ROS2_INTERFACE.md`](./ROS2_INTERFACE.md)。
+
 这里的 `pretrained_name_or_path=server-owned` 只是满足 client 配置；server CLI 中的真实
 checkpoint 路径具有优先级。插件只接受 exact 10D state、两路 `480×640×3 uint8` 图像和
 absolute8 action。本文命令必须保持 `dry_run=true`；`dry_run=false` 现在只允许进入

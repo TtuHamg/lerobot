@@ -179,3 +179,8 @@ outputs/
 *.part
 
 output_lerobot/
+
+
+log/
+logs/
+franka_project/cmd.txt
