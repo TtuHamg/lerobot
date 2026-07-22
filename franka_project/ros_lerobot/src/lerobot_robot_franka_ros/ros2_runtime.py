@@ -36,6 +36,11 @@ if TYPE_CHECKING:
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 _SCHEMA_VERSION = 1
 
+# The gateway publishes these under fixed names (see gateway_node.cpp).
+_GATEWAY_ACK_TOPIC = "/lerobot/franka/action_chunk_ack"
+_GATEWAY_STATUS_TOPIC = "/lerobot/franka/safety_gateway_status"
+_MAX_TRACKED_ACKS = 8
+
 
 class Ros2RuntimeUnavailableError(RuntimeError):
     """Raised when the optional ROS 2 runtime has not been built or sourced."""
@@ -60,6 +65,23 @@ class _RosBindings:
     joint_state_type: type
     pose_type: type
     action_chunk_type: type
+    action_chunk_ack_type: type
+    gateway_status_type: type
+
+
+@dataclass(frozen=True, slots=True)
+class GatewayPlanState:
+    """Snapshot of the gateway's progress on one published plan."""
+
+    accepted: bool
+    waypoint_count: int
+    status_fresh: bool
+    # True only while the gateway status message refers to this exact plan.
+    status_plan_matches: bool
+    applied_waypoint_index: int
+    has_active_plan: bool
+    armed: bool
+    detail: str
 
 
 def _load_ros_bindings() -> _RosBindings:
@@ -68,7 +90,11 @@ def _load_ros_bindings() -> _RosBindings:
     try:
         import rclpy
         from geometry_msgs.msg import Pose, PoseStamped
-        from lerobot_franka_interfaces.msg import CartesianActionChunk
+        from lerobot_franka_interfaces.msg import (
+            CartesianActionChunk,
+            CartesianActionChunkAck,
+            SafetyGatewayStatus,
+        )
         from rclpy.context import Context
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -100,6 +126,8 @@ def _load_ros_bindings() -> _RosBindings:
         joint_state_type=JointState,
         pose_type=Pose,
         action_chunk_type=CartesianActionChunk,
+        action_chunk_ack_type=CartesianActionChunkAck,
+        gateway_status_type=SafetyGatewayStatus,
     )
 
 
@@ -149,6 +177,12 @@ class Ros2Runtime:
         self._closing = False
         self._spin_error: BaseException | None = None
         self._last_callback_error: dict[str, float] = {}
+        # Gateway execution progress, keyed under the same lock:
+        # plan acks (accepted/rejected + waypoint count) and the latest status.
+        self._gateway_lock = threading.Lock()
+        self._plan_acks: dict[int, tuple[bool, int]] = {}
+        self._gateway_status: Any | None = None
+        self._gateway_status_monotonic_ns: int | None = None
 
     @property
     def is_running(self) -> bool:
@@ -233,6 +267,18 @@ class Ros2Runtime:
                         self.config.gripper_topic,
                         self._gripper_joint_state_callback,
                         sensor_qos,
+                    ),
+                    node.create_subscription(
+                        bindings.action_chunk_ack_type,
+                        _GATEWAY_ACK_TOPIC,
+                        self._gateway_ack_callback,
+                        action_qos,
+                    ),
+                    node.create_subscription(
+                        bindings.gateway_status_type,
+                        _GATEWAY_STATUS_TOPIC,
+                        self._gateway_status_callback,
+                        action_qos,
                     ),
                 ]
                 publisher = node.create_publisher(
@@ -344,6 +390,68 @@ class Ros2Runtime:
             self.cache.update_qpos(self._joint_state_sample(message))
         except Exception as error:
             self._log_callback_error("arm joint state", error)
+
+    def _gateway_ack_callback(self, message: Any) -> None:
+        try:
+            key = (str(message.session_id), int(message.plan_id))
+            with self._gateway_lock:
+                self._plan_acks[key] = (bool(message.accepted), int(message.waypoint_count))
+                while len(self._plan_acks) > _MAX_TRACKED_ACKS:
+                    self._plan_acks.pop(next(iter(self._plan_acks)))
+        except Exception as error:
+            self._log_callback_error("gateway ack", error)
+
+    def _gateway_status_callback(self, message: Any) -> None:
+        try:
+            with self._gateway_lock:
+                self._gateway_status = message
+                self._gateway_status_monotonic_ns = time.monotonic_ns()
+        except Exception as error:
+            self._log_callback_error("gateway status", error)
+
+    def get_plan_execution_state(
+        self, session_id: str, plan_id: int, *, status_freshness_ns: int
+    ) -> GatewayPlanState | None:
+        """Combine the plan's ack with live gateway progress; None before the ack."""
+
+        with self._gateway_lock:
+            ack = self._plan_acks.get((str(session_id), int(plan_id)))
+            status = self._gateway_status
+            status_ns = self._gateway_status_monotonic_ns
+        if ack is None:
+            return None
+        accepted, waypoint_count = ack
+        status_fresh = (
+            status is not None
+            and status_ns is not None
+            and time.monotonic_ns() - status_ns <= status_freshness_ns
+        )
+        if not status_fresh:
+            return GatewayPlanState(
+                accepted=accepted,
+                waypoint_count=waypoint_count,
+                status_fresh=False,
+                status_plan_matches=False,
+                applied_waypoint_index=0,
+                has_active_plan=False,
+                armed=False,
+                detail="gateway status is stale",
+            )
+        status_plan_matches = (
+            str(status.session_id) == str(session_id) and int(status.plan_id) == int(plan_id)
+        )
+        return GatewayPlanState(
+            accepted=accepted,
+            waypoint_count=waypoint_count,
+            status_fresh=True,
+            status_plan_matches=status_plan_matches,
+            applied_waypoint_index=(
+                int(status.applied_waypoint_index) if status_plan_matches else 0
+            ),
+            has_active_plan=bool(status.has_active_plan) and status_plan_matches,
+            armed=bool(status.armed),
+            detail=str(status.detail),
+        )
 
     def _gripper_joint_state_callback(self, message: Any) -> None:
         try:

@@ -181,6 +181,13 @@ class RobotClientConfig:
 
     # Control behavior configuration
     chunk_size_threshold: float = field(default=0.5, metadata={"help": "Threshold for chunk size control"})
+    action_offset: int = field(
+        default=0,
+        metadata={
+            "help": "Offset added to latest_action when assigning a new observation timestep. "
+            "Set to 1 so the first predicted action targets the next timestep."
+        },
+    )
     enable_pending_observation: bool = field(
         default=True,
         metadata={
@@ -237,6 +244,11 @@ class RobotClientConfig:
         if self.chunk_size_threshold < 0 or self.chunk_size_threshold > 1:
             raise ValueError(f"chunk_size_threshold must be between 0 and 1, got {self.chunk_size_threshold}")
 
+        if isinstance(self.action_offset, bool) or not isinstance(self.action_offset, int):
+            raise ValueError(f"action_offset must be an integer, got {self.action_offset!r}")
+        if self.action_offset not in (0, 1):
+            raise ValueError(f"action_offset must be 0 or 1, got {self.action_offset}")
+
         if self.enable_pending_observation and self.pending_observation_timeout_s <= 0:
             raise ValueError(
                 f"pending_observation_timeout_s must be positive, got {self.pending_observation_timeout_s}"
@@ -264,6 +276,7 @@ class RobotClientConfig:
             "policy_device": self.policy_device,
             "client_device": self.client_device,
             "chunk_size_threshold": self.chunk_size_threshold,
+            "action_offset": self.action_offset,
             "enable_pending_observation": self.enable_pending_observation,
             "pending_observation_timeout_s": self.pending_observation_timeout_s,
             "fps": self.fps,

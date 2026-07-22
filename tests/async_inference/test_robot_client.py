@@ -20,6 +20,7 @@ no real hardware is accessed. Only the queue-update mechanism is verified.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from queue import Queue
 
 import pytest
@@ -106,6 +107,34 @@ def test_update_action_queue_discards_stale(robot_client):
     resulting_timesteps = [a.get_timestep() for a in robot_client.action_queue.queue]
 
     assert resulting_timesteps == [5, 6, 7]
+
+
+@pytest.mark.parametrize(
+    ("latest_action", "action_offset", "expected"),
+    [
+        (-1, 0, 0),
+        (-1, 1, 0),
+        (0, 0, 0),
+        (0, 1, 1),
+        (49, 0, 49),
+        (49, 1, 50),
+    ],
+)
+def test_next_observation_timestep_uses_configured_action_offset(
+    robot_client, latest_action: int, action_offset: int, expected: int
+):
+    robot_client.config.action_offset = action_offset
+    assert robot_client._next_observation_timestep(latest_action) == expected
+
+
+@pytest.mark.parametrize("invalid_offset", [-1, 2, True, 1.5])
+def test_action_offset_rejects_values_outside_zero_or_one(robot_client, invalid_offset):
+    with pytest.raises(ValueError, match="action_offset"):
+        replace(robot_client.config, action_offset=invalid_offset)
+
+
+def test_action_offset_is_serialized(robot_client):
+    assert robot_client.config.to_dict()["action_offset"] == 0
 
 
 @pytest.mark.parametrize(

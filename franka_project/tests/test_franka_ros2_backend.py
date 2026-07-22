@@ -19,6 +19,7 @@ PLUGIN_SRC = Path(__file__).parents[1] / "ros_lerobot" / "src"
 if str(PLUGIN_SRC) not in sys.path:
     sys.path.insert(0, str(PLUGIN_SRC))
 
+from lerobot.async_inference.configs import RobotClientConfig  # noqa: E402
 from lerobot.async_inference.helpers import TimedAction  # noqa: E402
 from lerobot_robot_franka_ros.config_franka_ros import FrankaRosConfig  # noqa: E402
 from lerobot_robot_franka_ros.contract import CAMERA_SHAPE, STATE_NAMES  # noqa: E402
@@ -47,6 +48,7 @@ def test_ros2_client_cli_help_is_parseable_without_ros() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert "--action_offset" in result.stdout
     assert "--robot.ros2_interface_only" in result.stdout
     assert "--robot.action_chunk_topic" in result.stdout
 
@@ -91,6 +93,20 @@ def _ros2_config(tmp_path) -> FrankaRosConfig:
         calibration_dir=tmp_path / "calibration",
         dry_run=False,
     )
+
+
+@pytest.mark.parametrize("action_offset", [0, 1])
+def test_action_offset_config_is_valid_and_serialized(tmp_path, action_offset: int) -> None:
+    config = RobotClientConfig(robot=_ros2_config(tmp_path), action_offset=action_offset)
+
+    assert config.action_offset == action_offset
+    assert config.to_dict()["action_offset"] == action_offset
+
+
+@pytest.mark.parametrize("action_offset", [-1, 2, True, 1.5])
+def test_action_offset_config_rejects_unsupported_values(tmp_path, action_offset) -> None:
+    with pytest.raises(ValueError, match="action_offset"):
+        RobotClientConfig(robot=_ros2_config(tmp_path), action_offset=action_offset)
 
 
 def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
@@ -139,7 +155,9 @@ def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
     )
 
 
-def _timed_chunk(*, timestep: int = 4, source_timestamp: float = 1_768_000_000.0):
+def _timed_chunk(
+    *, timestep: int = 4, source_timestamp: float = 1_768_000_000.0, count: int = 2
+):
     period = 1.0 / 15.0
     server_send = source_timestamp + 0.2
     rows = (
@@ -150,10 +168,10 @@ def _timed_chunk(*, timestep: int = 4, source_timestamp: float = 1_768_000_000.0
         TimedAction(
             timestamp=source_timestamp + index * period,
             timestep=timestep + index,
-            action=torch.tensor(row, dtype=torch.float32),
+            action=torch.tensor(rows[index % len(rows)], dtype=torch.float32),
             server_send_timestamp=server_send,
         )
-        for index, row in enumerate(rows)
+        for index in range(count)
     ]
 
 
@@ -265,7 +283,7 @@ def _bare_chunk_client(robot: _FakeChunkRobot) -> FrankaRos2RobotClient:
     client.action_queue = Queue()
     client.action_queue_size = []
     client.shutdown_event = threading.Event()
-    client.config = SimpleNamespace(environment_dt=1.0 / 15.0)
+    client.config = SimpleNamespace(environment_dt=1.0 / 15.0, action_offset=0)
     client.logger = logging.getLogger("test-franka-ros2-client")
     return client
 
@@ -293,6 +311,55 @@ def test_client_hook_publishes_one_fresh_chunk_after_stale_prefix() -> None:
     assert metadata["period_s"] == pytest.approx(1.0 / 15.0)
     assert [action.timestep for action in client.action_queue.queue] == [5, 6]
     assert not client.shutdown_event.is_set()
+
+
+@pytest.mark.parametrize(
+    ("action_offset", "expected_count", "expected_source_timestep", "expected_last_timestep"),
+    [
+        (0, 49, 4, 53),
+        (1, 50, 5, 54),
+    ],
+)
+def test_action_offset_controls_fixed_overlap_in_fifty_action_chunk(
+    action_offset: int,
+    expected_count: int,
+    expected_source_timestep: int,
+    expected_last_timestep: int,
+) -> None:
+    robot = _FakeChunkRobot()
+    client = _bare_chunk_client(robot)
+    client.config.action_offset = action_offset
+    first_timestep = client._next_observation_timestep(client.latest_action)
+    incoming = _timed_chunk(timestep=first_timestep, count=50)
+
+    client._aggregate_action_queues(incoming, lambda _old, new: new)
+
+    assert len(robot.calls) == 1
+    published, metadata = robot.calls[0]
+    expected_timesteps = list(range(5, expected_last_timestep + 1))
+    assert len(published) == expected_count
+    assert [action.timestep for action in published] == expected_timesteps
+    assert metadata["source_observation_timestep"] == expected_source_timestep
+    assert metadata["source_observation_timestamp"] == incoming[0].timestamp
+    assert [action.timestep for action in client.action_queue.queue] == expected_timesteps
+
+
+def test_action_offset_one_still_discards_actions_that_expire_during_inference() -> None:
+    robot = _FakeChunkRobot()
+    client = _bare_chunk_client(robot)
+    client.config.action_offset = 1
+    first_timestep = client._next_observation_timestep(client.latest_action)
+    incoming = _timed_chunk(timestep=first_timestep, count=50)
+
+    # One queued action was consumed after observation capture but before this
+    # chunk arrived. It is genuinely stale and must not be sent to ROS2.
+    client.latest_action = 5
+    client._aggregate_action_queues(incoming, lambda _old, new: new)
+
+    published, metadata = robot.calls[0]
+    assert len(published) == 49
+    assert [action.timestep for action in published] == list(range(6, 55))
+    assert metadata["source_observation_timestep"] == 5
 
 
 def test_client_hook_fails_closed_when_chunk_publication_fails() -> None:

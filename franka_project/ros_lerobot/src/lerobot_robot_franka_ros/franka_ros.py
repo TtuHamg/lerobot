@@ -98,6 +98,14 @@ class FrankaRos(Robot):
         )
 
     @check_if_not_connected
+    def plan_execution_complete(self) -> bool:
+        """True when the gateway finished (or abandoned) the newest published plan."""
+
+        if not isinstance(self._backend, Ros2Backend):
+            raise RuntimeError("Plan execution state is only available in ROS2 interface mode")
+        return self._backend.plan_execution_complete()
+
+    @check_if_not_connected
     def get_qpos(self):
         """Return the seven-joint ROS sideband without changing PI0 state10."""
 

@@ -123,6 +123,7 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
             task="stack the cups",
             client_device="cpu",
             fps=15,
+            action_offset=1,
             aggregate_fn_name="latest_only",
             rename_map={
                 "observation.images.camera1": "observation.images.base_0_rgb",
@@ -133,12 +134,15 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
 
     try:
         assert client.start()
+        client.latest_action = 4
         observation = client.robot.get_observation()
         observation["task"] = "stack the cups"
+        observation_timestep = client._next_observation_timestep(client.latest_action)
+        assert observation_timestep == 5
         assert client.send_observation(
             TimedObservation(
                 timestamp=time.time(),
-                timestep=0,
+                timestep=observation_timestep,
                 observation=observation,
                 must_go=True,
             )
@@ -152,6 +156,8 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
         assert replay.SerializeToString() == response.SerializeToString()
         timed_actions = pickle.loads(response.data)  # nosec: trusted in-process test server
         assert len(timed_actions) == 2
+        assert [item.get_timestep() for item in timed_actions] == [5, 6]
+        assert response.source_timestep == observation_timestep
         absolute = torch.stack([item.get_action() for item in timed_actions])
         assert tuple(absolute.shape) == (2, 8)
         assert bool(torch.isfinite(absolute).all())
@@ -162,7 +168,11 @@ def test_stock_robot_client_round_trip_to_absolute_action_sink(
         )
 
         client._aggregate_action_queues(timed_actions, client.config.aggregate_fn)
+        client._remember_committed_action_chunk(response.chunk_id)
+        client._resolve_pending_observation(response.request_id)
         client._ack_action_delivery(response)
+        assert client._pending_observation is False
+        assert client._pending_observation_request_id is None
         assert policy_server._pending_delivery is None
         assert response.source_timestep in policy_server._predicted_timesteps
         client.control_loop_action()

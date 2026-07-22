@@ -38,6 +38,17 @@ class FrankaRos2RobotClient(RobotClient):
         if not isinstance(self.robot, FrankaRos):
             raise TypeError("franka_ros plugin did not construct a FrankaRos instance")
 
+    def _ready_to_send_observation(self):
+        # The stock check runs first: it owns the pending-observation
+        # bookkeeping and the queue-threshold decision on the nominal clock.
+        if not super()._ready_to_send_observation():
+            return False
+        # Gate the next observation on the gateway's real execution progress.
+        # When retiming slows execution below real time, the nominal clock
+        # otherwise requests a replacement chunk mid-plan and every
+        # replacement starts with a catch-up jump.
+        return self.robot.plan_execution_complete()
+
     def _aggregate_action_queues(self, incoming_actions, aggregate_fn=None):
         if not isinstance(incoming_actions, list):
             raise TypeError("Incoming action chunk must be a list")

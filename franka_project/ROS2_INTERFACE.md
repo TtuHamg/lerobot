@@ -301,6 +301,22 @@ GetActions
   -> stock control loop 逐点 pop，仅更新 bookkeeping
 ```
 
+新 observation 的逻辑 timestep 在发送 RPC 前按下式生成：
+
+```text
+observation_timestep = max(latest_action + action_offset, 0)
+```
+
+`action_offset` 是 RobotClient 顶层配置，默认值为 `0`，保持原有编号语义。设置
+`--action_offset=1` 后，PolicyServer 的第一条 action 从本地已消费 cursor 的下一 timestep
+开始编号。假设创建 observation 时 `latest_action=L`，且等待返回期间该 cursor 没有继续推进，
+50-step server chunk 会从 `L+1` 到 `L+50`，因而 50 条都会通过 fresh filter。若推理/传输期间
+cursor 又推进了 `m` 步，前 `m` 条仍属于真正 stale action，会按现有规则裁剪；因此该参数消除
+固定的一步重叠，但不承诺任何时延下都无条件得到 50 条。
+
+该偏移只改变 observation/action 的逻辑编号。Pending retry 仍复用同一 observation、timestep
+和 `request_id`，gRPC ACK 状态机、ROS chunk schema 以及 gateway 的验证/武装协议均不变。
+
 因此 ROS 看到的是本地 client 接受后的 fresh suffix，不是包含已执行 stale prefix
 的原始 server payload。如果 chunk 转换/发布失败，client 立即设置 shutdown event
 并重新抛出异常；不 fallback 为逐 waypoint ROS 发布。
@@ -413,6 +429,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --policy_device=cpu \
   --client_device=cpu \
   --actions_per_chunk=50 \
+  --action_offset=1 \
   --fps=15 \
   --chunk_size_threshold=0.5 \
   --aggregate_fn_name=latest_only \

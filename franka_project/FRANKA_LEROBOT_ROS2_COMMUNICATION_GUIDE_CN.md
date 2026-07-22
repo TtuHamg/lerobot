@@ -292,13 +292,18 @@ SendPolicyInstructions(RemotePolicyConfig)
 ```text
 task
 timestamp                 # time.time()，供跨机器时间关联
-timestep                  # 当前 latest_action，初始为 0
+timestep                  # max(latest_action + action_offset, 0)
 must_go                   # action queue 空时强制推理
 client_send_timestamp
 request_id                # <client-session-uuid>:<monotonic-sequence>
 ```
 
 `request_id` 在同一次逻辑 observation 的 transport retry 中保持不变。
+
+`action_offset` 是 RobotClient 顶层 CLI 参数，默认值为 `0`，保持旧版“以当前
+`latest_action` 编号”的行为。显式设置 `--action_offset=1` 时，新 observation 从本地已消费
+cursor 的下一 timestep 开始编号。启动阶段 `latest_action=-1`，经 `max(..., 0)` 后 timestep
+仍为 `0`。
 
 Observation 使用 pickle 序列化，再通过 `SendObservations(stream Observation)` 分片发送。
 当前传输是受信任内部协议，不应把 raw gRPC 或 tunnel server 暴露给不受信任客户端，因为
@@ -473,6 +478,20 @@ timestep <= latest_action
 4. ROS 转换或 publish 失败时设置 client shutdown，不降级为逐 waypoint publish。
 
 Absolute quaternion 不能使用逐元素 `weighted_average`，因此必须使用 `latest_only`。
+
+令创建 observation 时的 `latest_action=L`。在 `--action_offset=1` 下，observation timestep
+为 `max(L+1, 0)`，PolicyServer 按第 5.4 节从该值连续生成 action。对于正常的 `L>=0`：
+
+- action 返回前 cursor 仍为 `L` 时，50-step chunk 编号为 `L+1 ... L+50`，50 条全部保留；
+- 推理/传输期间 cursor 又推进 `m` 步时，`L+1 ... L+m` 已真正过期，fresh filter 仍会裁剪
+  这 `m` 条；
+- 因此 offset 解决的是固定首项与 `latest_action` 重叠造成的 49/50，不是“任何时延下固定
+  发布 50 条”的承诺。
+
+Pending transport retry 会复用原 observation、偏移后的 timestep 和 `request_id`，不会按新的
+cursor 再算一次。Action delivery ACK 的去重/重发状态机、ROS `CartesianActionChunk` wire
+schema，以及 gateway 的 `enabled`/`shadow`/`armed` 语义均未改变；gateway 也不直接接收
+`action_offset` 参数。
 
 ### 6.3 `send_action()` 为什么不控制 ROS
 
@@ -1276,6 +1295,10 @@ ACK accepted=true
 ACK result=ACCEPTED_SHADOW
 detail=plan validated
 ```
+
+这是当时尚无显式 offset、等价于 `action_offset=0` 的现场记录，故保留 `waypoints=49`，不以
+新配置倒推改写历史结果。现在显式使用 `--action_offset=1` 时，如果 action 返回前本地 cursor
+没有继续推进，预期可发布完整 50 points；若 cursor 已推进，仍按第 6.2 节裁剪真正 stale 的前缀。
 
 服务端 contract 仍是 50-step；本次 ROS chunk 为 49 points 是因为 client 按第 6.2 节移除了
 已经过期的 stale prefix。该结果证明 model chunk 已到达 Gateway 并通过纯验证，不证明已武装
