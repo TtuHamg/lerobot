@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 import train_pi0 as harness  # noqa: E402
 
 
-CONFIG_PATH = PROJECT_ROOT / "configs/train/pi0_ActTrans_eef_move_cups_30hz.yaml"
+CONFIG_PATH = PROJECT_ROOT / "configs/train/pi0_eef_move_cups_30hz_action_expert_paligemma.yaml"
 
 
 def _config() -> dict[str, Any]:

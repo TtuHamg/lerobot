@@ -51,7 +51,10 @@ def test_async_inference_e2e(monkeypatch):
     import grpc
 
     from lerobot.async_inference.configs import PolicyServerConfig, RobotClientConfig
-    from lerobot.async_inference.helpers import map_robot_keys_to_lerobot_features
+    from lerobot.async_inference.helpers import (
+        ASYNC_INFERENCE_PROTOCOL_VERSION,
+        map_robot_keys_to_lerobot_features,
+    )
     from lerobot.async_inference.policy_server import PolicyServer
     from lerobot.async_inference.robot_client import RobotClient
     from lerobot.robots.utils import make_robot_from_config
@@ -118,7 +121,12 @@ def test_async_inference_e2e(monkeypatch):
 
     # Bypass potentially heavy model loading inside SendPolicyInstructions
     def _fake_send_policy_instructions(self, request, context):  # noqa: N802
-        return services_pb2.Empty()
+        return services_pb2.PolicySetupAck(
+            protocol_version=ASYNC_INFERENCE_PROTOCOL_VERSION,
+            fps=policy_server.config.fps,
+            policy_type="test",
+            actions_per_chunk=policy_server.actions_per_chunk,
+        )
 
     monkeypatch.setattr(PolicyServer, "SendPolicyInstructions", _fake_send_policy_instructions, raising=True)
 

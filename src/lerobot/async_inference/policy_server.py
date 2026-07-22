@@ -59,6 +59,7 @@ from lerobot.types import PolicyAction
 from .configs import PolicyServerConfig
 from .constants import SUPPORTED_POLICIES
 from .helpers import (
+    ASYNC_INFERENCE_PROTOCOL_VERSION,
     FPSTracker,
     Observation,
     RemotePolicyConfig,
@@ -167,6 +168,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
     def _make_policy_setup_key(self, policy_specs: RemotePolicyConfig) -> tuple[Any, ...]:
         return (
+            policy_specs.protocol_version,
+            policy_specs.fps,
             policy_specs.policy_type,
             policy_specs.pretrained_name_or_path,
             policy_specs.device,
@@ -177,6 +180,21 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
     def _resolve_policy_specs(self, client_specs: RemotePolicyConfig) -> RemotePolicyConfig:
         """Merge client-provided robot features with server-owned policy settings."""
+        # Inspect instance state so an old pickle cannot inherit newly added
+        # dataclass defaults from newer code and masquerade as a current peer.
+        client_state = vars(client_specs)
+        client_protocol = client_state.get("protocol_version")
+        if client_protocol != ASYNC_INFERENCE_PROTOCOL_VERSION:
+            raise ValueError(
+                "Async inference protocol mismatch: "
+                f"server={ASYNC_INFERENCE_PROTOCOL_VERSION}, client={client_protocol!r}"
+            )
+        client_fps = client_state.get("fps")
+        if client_fps != self.config.fps:
+            raise ValueError(
+                f"Async inference FPS mismatch: server={self.config.fps}, client={client_fps!r}"
+            )
+
         policy_specs = RemotePolicyConfig(
             policy_type=self.config.policy_type or client_specs.policy_type,
             pretrained_name_or_path=self.config.pretrained_name_or_path
@@ -185,6 +203,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             actions_per_chunk=self.config.actions_per_chunk or client_specs.actions_per_chunk,
             device=self.config.policy_device or client_specs.device,
             rename_map=client_specs.rename_map,
+            protocol_version=client_specs.protocol_version,
+            fps=client_specs.fps,
         )
 
         missing = [
@@ -204,6 +224,17 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             )
 
         return policy_specs
+
+    @staticmethod
+    def _make_policy_setup_ack(policy_specs: RemotePolicyConfig) -> services_pb2.PolicySetupAck:
+        """Return the resolved wire contract that the client must verify."""
+
+        return services_pb2.PolicySetupAck(
+            protocol_version=policy_specs.protocol_version,
+            fps=policy_specs.fps,
+            policy_type=policy_specs.policy_type,
+            actions_per_chunk=policy_specs.actions_per_chunk,
+        )
 
     def _reset_server(self) -> None:
         """Flushes server state when new client connects."""
@@ -238,7 +269,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         if not self.running:
             self.logger.warning("Server is not running. Ignoring policy instructions.")
-            return services_pb2.Empty()
+            return services_pb2.PolicySetupAck()
 
         client_id = context.peer()
 
@@ -278,7 +309,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                 and self.postprocessor is not None
             ):
                 self.logger.info("Policy setup unchanged; reusing loaded policy and processors.")
-                return services_pb2.Empty()
+                return self._make_policy_setup_ack(policy_specs)
 
             start = time.perf_counter()
             self.policy = self._load_policy(self.policy_type, policy_specs.pretrained_name_or_path)
@@ -301,7 +332,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
 
-        return services_pb2.Empty()
+        return self._make_policy_setup_ack(policy_specs)
 
     def SendObservations(self, request_iterator, context):  # noqa: N802
         """Receive observations from the robot client"""

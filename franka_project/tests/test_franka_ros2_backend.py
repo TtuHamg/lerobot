@@ -24,7 +24,10 @@ from lerobot.async_inference.helpers import TimedAction  # noqa: E402
 from lerobot_robot_franka_ros.config_franka_ros import FrankaRosConfig  # noqa: E402
 from lerobot_robot_franka_ros.contract import CAMERA_SHAPE, STATE_NAMES  # noqa: E402
 from lerobot_robot_franka_ros.ros2_backend import Ros2Backend, Ros2BackendError  # noqa: E402
-from lerobot_robot_franka_ros.ros2_client import FrankaRos2RobotClient  # noqa: E402
+from lerobot_robot_franka_ros.ros2_client import (  # noqa: E402
+    FrankaRos2RobotClient,
+    resolve_franka_client_policy_config,
+)
 from lerobot_robot_franka_ros.ros2_contract import (  # noqa: E402
     ImageSample,
     JointStateSample,
@@ -107,6 +110,116 @@ def test_action_offset_config_is_valid_and_serialized(tmp_path, action_offset: i
 def test_action_offset_config_rejects_unsupported_values(tmp_path, action_offset) -> None:
     with pytest.raises(ValueError, match="action_offset"):
         RobotClientConfig(robot=_ros2_config(tmp_path), action_offset=action_offset)
+
+
+def test_pi0_client_profile_autofills_camera_rename_map(tmp_path) -> None:
+    config = RobotClientConfig(
+        robot=_ros2_config(tmp_path),
+        policy_type="pi0",
+        task="task-owned-by-checkpoint",
+        fps=30,
+        actions_per_chunk=7,
+        action_offset=1,
+    )
+
+    resolved = resolve_franka_client_policy_config(config)
+
+    assert config.rename_map == {}
+    assert resolved.rename_map == {
+        "observation.images.camera1": "observation.images.base_0_rgb",
+        "observation.images.camera2": "observation.images.left_wrist_0_rgb",
+    }
+    assert resolved.task == config.task
+    assert resolved.fps == config.fps
+    assert resolved.actions_per_chunk == config.actions_per_chunk
+
+
+def test_fastwam_client_profile_requires_raw_camera_keys(tmp_path) -> None:
+    robot = FrankaRosConfig(
+        id="fastwam-ros2-test",
+        calibration_dir=tmp_path / "calibration",
+        dry_run=False,
+        gripper_open_position=0.0,
+        gripper_closed_position=0.8,
+        gripper_max_skew_s=0.01,
+    )
+    config = RobotClientConfig(robot=robot, policy_type="fastwam", action_offset=1)
+    assert resolve_franka_client_policy_config(config).rename_map == {}
+
+    config.rename_map = {
+        "observation.images.camera1": "observation.images.base_0_rgb",
+        "observation.images.camera2": "observation.images.left_wrist_0_rgb",
+    }
+    with pytest.raises(ValueError, match="fastwam.*rename_map"):
+        resolve_franka_client_policy_config(config)
+
+
+def test_fastwam_client_profile_rejects_wrong_gripper_contract(tmp_path) -> None:
+    config = RobotClientConfig(
+        robot=_ros2_config(tmp_path), policy_type="fastwam", action_offset=1
+    )
+    with pytest.raises(ValueError, match="gripper_closed_position=0.8"):
+        resolve_franka_client_policy_config(config)
+
+
+@pytest.mark.parametrize(
+    ("override", "error_field"),
+    [
+        ({"camera1_topic": "/wrong/camera1"}, "camera1_topic"),
+        ({"camera2_topic": "/wrong/camera2"}, "camera2_topic"),
+        ({"eef_pose_topic": "/wrong/eef"}, "eef_pose_topic"),
+        ({"gripper_topic": "/wrong/gripper"}, "gripper_topic"),
+        ({"gripper_joint_name": "wrong_joint"}, "gripper_joint_name"),
+        ({"camera2_max_skew_s": 0.1001}, "camera2_max_skew_s"),
+        ({"eef_max_skew_s": 0.0501}, "eef_max_skew_s"),
+    ],
+)
+def test_fastwam_client_profile_rejects_sensor_contract_drift(
+    tmp_path, override: dict, error_field: str
+) -> None:
+    robot_kwargs = {
+        "id": "fastwam-contract-test",
+        "calibration_dir": tmp_path / "calibration",
+        "dry_run": False,
+        "gripper_open_position": 0.0,
+        "gripper_closed_position": 0.8,
+        "gripper_max_skew_s": 0.01,
+    }
+    robot_kwargs.update(override)
+    config = RobotClientConfig(
+        robot=FrankaRosConfig(**robot_kwargs),
+        policy_type="fastwam",
+        action_offset=1,
+    )
+
+    with pytest.raises(ValueError, match=error_field):
+        resolve_franka_client_policy_config(config)
+
+
+@pytest.mark.parametrize("policy_type", [None, "act"])
+def test_franka_client_profile_rejects_unknown_policy(tmp_path, policy_type) -> None:
+    config = RobotClientConfig(robot=_ros2_config(tmp_path), policy_type=policy_type)
+    with pytest.raises(ValueError, match="pi0.*fastwam"):
+        resolve_franka_client_policy_config(config)
+
+
+def test_franka_client_profile_requires_next_timestep_offset(tmp_path) -> None:
+    config = RobotClientConfig(robot=_ros2_config(tmp_path), policy_type="pi0")
+    with pytest.raises(ValueError, match="action_offset=1"):
+        resolve_franka_client_policy_config(config)
+
+
+def test_franka_client_profile_requires_frozen_base_frame(tmp_path) -> None:
+    robot = FrankaRosConfig(
+        id="wrong-frame-test",
+        calibration_dir=tmp_path / "calibration",
+        dry_run=False,
+        base_frame="world",
+    )
+    config = RobotClientConfig(robot=robot, policy_type="pi0", action_offset=1)
+
+    with pytest.raises(ValueError, match="frame 'base'"):
+        resolve_franka_client_policy_config(config)
 
 
 def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:

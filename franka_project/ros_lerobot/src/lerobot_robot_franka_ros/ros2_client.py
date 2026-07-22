@@ -1,8 +1,9 @@
 """Franka-specific async client hook for publishing complete ROS2 action chunks."""
 
 import logging
+import math
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pprint import pformat
 
 import draccus
@@ -13,7 +14,82 @@ from lerobot.async_inference.robot_client import RobotClient
 from lerobot.utils.import_utils import register_third_party_plugins
 
 from .config_franka_ros import FrankaRosConfig
+from .contract import FASTWAM_RENAME_MAP, FRANKA_POLICY_TYPES, PI0_RENAME_MAP
 from .franka_ros import FrankaRos
+
+
+_FASTWAM_SENSOR_CONTRACT = {
+    "camera1_topic": "/camera1/camera1/color/image_raw",
+    "camera2_topic": "/camera2/camera2/color/image_raw",
+    "eef_pose_topic": "/franka_robot_state_broadcaster/current_pose",
+    "gripper_topic": "/gripper/joint_states",
+    "gripper_joint_name": "robotiq_85_left_knuckle_joint",
+}
+
+
+def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClientConfig:
+    """Resolve the policy-specific camera wire profile without changing robot semantics."""
+
+    if not isinstance(config.robot, FrankaRosConfig):
+        raise TypeError("FrankaRos2RobotClient requires robot.type=franka_ros")
+    if config.policy_type not in FRANKA_POLICY_TYPES:
+        raise ValueError(
+            f"Franka ROS2 client requires policy_type in {FRANKA_POLICY_TYPES}, "
+            f"got {config.policy_type!r}"
+        )
+    if config.action_offset != 1:
+        raise ValueError(
+            "Franka ROS2 chunk delivery requires action_offset=1 so the first predicted "
+            "waypoint is not discarded as stale"
+        )
+    if config.robot.base_frame != "base":
+        raise ValueError(
+            "Franka PI0/FastWAM checkpoints use the frozen Cartesian frame 'base'; "
+            f"got robot.base_frame={config.robot.base_frame!r}"
+        )
+    expected_map = PI0_RENAME_MAP if config.policy_type == "pi0" else FASTWAM_RENAME_MAP
+    actual_map = config.rename_map
+    # Empty is the natural CLI default.  For PI0, treat it as an omitted wire
+    # profile and fill the frozen mapping; FastWAM intentionally keeps it empty.
+    if config.policy_type == "pi0" and actual_map == {}:
+        actual_map = expected_map
+    if actual_map != expected_map:
+        raise ValueError(
+            f"Franka {config.policy_type} client rename_map mismatch: "
+            f"expected={expected_map}, actual={config.rename_map}"
+        )
+    if config.policy_type == "fastwam":
+        robot = config.robot
+        for field_name, expected_value in _FASTWAM_SENSOR_CONTRACT.items():
+            actual_value = getattr(robot, field_name)
+            if actual_value != expected_value:
+                raise ValueError(
+                    f"The selected FastWAM checkpoint requires robot.{field_name}="
+                    f"{expected_value!r}, got {actual_value!r}"
+                )
+        calibration_matches = math.isclose(
+            float(robot.gripper_open_position), 0.0, rel_tol=0.0, abs_tol=1e-12
+        ) and math.isclose(
+            float(robot.gripper_closed_position), 0.8, rel_tol=0.0, abs_tol=1e-12
+        )
+        if not calibration_matches:
+            raise ValueError(
+                "The selected FastWAM checkpoint requires gripper_open_position=0.0 "
+                "and gripper_closed_position=0.8; confirm the live joint units before deployment"
+            )
+        if robot.gripper_max_skew_s > 0.01:
+            raise ValueError(
+                "The selected FastWAM checkpoint requires gripper_max_skew_s <= 0.01"
+            )
+        if robot.camera2_max_skew_s > 0.1:
+            raise ValueError(
+                "The selected FastWAM checkpoint requires camera2_max_skew_s <= 0.1"
+            )
+        if robot.eef_max_skew_s > 0.05:
+            raise ValueError(
+                "The selected FastWAM checkpoint requires eef_max_skew_s <= 0.05"
+            )
+    return replace(config, rename_map=dict(expected_map))
 
 
 class FrankaRos2RobotClient(RobotClient):
@@ -26,8 +102,7 @@ class FrankaRos2RobotClient(RobotClient):
     """
 
     def __init__(self, config: RobotClientConfig):
-        if not isinstance(config.robot, FrankaRosConfig):
-            raise TypeError("FrankaRos2RobotClient requires robot.type=franka_ros")
+        config = resolve_franka_client_policy_config(config)
         if config.robot.dry_run:
             raise ValueError("FrankaRos2RobotClient requires robot.dry_run=false")
         if not config.robot.ros2_interface_only:
@@ -90,6 +165,7 @@ class FrankaRos2RobotClient(RobotClient):
 def ros2_async_client(cfg: RobotClientConfig) -> None:
     """Run the standard async loops with the Franka chunk hook enabled."""
 
+    cfg = resolve_franka_client_policy_config(cfg)
     logging.info(pformat(asdict(cfg)))
     client = FrankaRos2RobotClient(cfg)
     if not client.start():

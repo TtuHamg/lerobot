@@ -39,6 +39,7 @@ from lerobot.utils.feature_utils import build_dataset_frame, hw_to_dataset_featu
 from lerobot.utils.utils import init_logging
 
 Action = torch.Tensor
+ASYNC_INFERENCE_PROTOCOL_VERSION = 2
 
 # observation as received from the robot (can be numpy arrays, floats, etc.)
 RawObservation = dict[str, Any]
@@ -280,6 +281,8 @@ class RemotePolicyConfig:
     actions_per_chunk: int | None
     device: str | None = "cpu"
     rename_map: dict[str, str] = field(default_factory=dict)
+    protocol_version: int = ASYNC_INFERENCE_PROTOCOL_VERSION
+    fps: int | None = None
 
 
 def _compare_observation_states(obs1_state: torch.Tensor, obs2_state: torch.Tensor, atol: float) -> bool:
