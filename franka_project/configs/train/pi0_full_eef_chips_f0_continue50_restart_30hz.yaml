@@ -1,0 +1,77 @@
+schema_version: 1
+stage: F0-CONT-30
+job_name: pi0_full_eef_chips_f0_cont50_restart_obs30_act30_k50_46pass
+
+continuation:
+  source_checkpoint: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_chips_obs30_act30_k50_v1/20260717T041129Z_pi0_full_eef_chips_f0_obs30_act30_k50_46pass_255fea1e/checkpoints/step-036150
+  expected_source_step: 36150
+  expected_source_run_config_sha256: 3779e6d5bdd21161094aad10d2a226cbe109eef90a879f2ae982d70d37afd9e9
+  expected_source_checkpoint_manifest_sha256: 237ff1d6e49408ea03a4d0d1a0482800602c9c810ddb2f5d73d5ea6b5467201e
+  preserve_optimizer_state: true
+  preserve_rng_state: true
+  preserve_global_step: true
+  preserve_data_offset: true
+  scheduler: cosine_restart_no_warmup
+
+dataset:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/data/lerobot/franka_chips_current_eef_obs30_act30_k50_v1_46pass_9e7eec68
+  profile: native30
+  observation_fps: 30
+  action_fps: 30
+  chunk_size: 50
+  task_instruction: pick up the potato chip
+  episode_indices: null
+  max_anchors_per_episode: null
+  expected_scope_content_sha256: 9e7eec6861538b62b6e23ec5c567790da596af0e66b35c2488cf859af728ad19
+
+model:
+  pretrained_path: /ytech_milm_intern/tujiahang/.cache/huggingface/hub/models--lerobot--pi0_base/snapshots/25c379b52ba2ff8788cab921758a3cc3fe3f77f2
+  strict: true
+  dtype: bfloat16
+  gradient_checkpointing: true
+  compile_model: false
+  max_state_dim: 32
+  max_action_dim: 32
+  freeze_vision_encoder: false
+  train_expert_only: false
+  use_relative_actions: false
+  peft: null
+
+training:
+  seed: 1000
+  # 50 additional epochs after source global step 36150.
+  epochs: 50
+  steps: auto
+  per_device_batch_size: 16
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  shuffle: true
+  # Preserve AdamW moments but explicitly restart the new no-warmup cosine phase.
+  peak_lr: 1.0e-5
+  final_lr: 1.0e-6
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+  mixed_precision: bf16
+  log_freq: 50
+  monitor_freq_epochs: 1
+  monitor_max_samples: 1024
+  save_freq_epochs: 10
+  save_optimizer_state: true
+  require_gradient_coverage: true
+  gpu_count: 2
+
+output:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_full_eef_chips_obs30_act30_k50_v1
+  immutable_run_directory: true
+  save_to_hub: false
+
+wandb:
+  enable: true
+  mode: online
+  entity: ttuhamg
+  project: franka_pi0_full_eef
+  disable_artifact: true
+  save_code: false
+  tags: [franka, pi0, full_parameter, eef, potato_chip, obs30_act30, k50, f0_continuation, continue50, lr_restart]
