@@ -10,6 +10,7 @@ find_package(std_msgs REQUIRED)
 set(interface_files
   "msg/CartesianActionChunk.msg"
   "msg/CartesianActionChunkAck.msg"
+  "msg/JointActionChunk.msg"
   "msg/SafetyGatewayStatus.msg"
 )
 
