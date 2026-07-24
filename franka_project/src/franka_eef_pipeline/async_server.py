@@ -157,7 +157,9 @@ class FrankaFastWAMCheckpointContract:
     observation_fps: int
     action_fps: int
     chunk_size: int
+    action_video_freq_ratio: int
     num_video_frames: int
+    video_fps: float
     image_height: int
     image_width: int
     context_len: int
@@ -640,6 +642,41 @@ def _shape_meta_dimension(shape_meta: Mapping[str, Any], group: str) -> int:
     return total
 
 
+def _derive_fastwam_video_timing(
+    temporal: Mapping[str, Any],
+    *,
+    observation_fps: int,
+    action_horizon: int,
+) -> tuple[int, int, float]:
+    """Resolve sparse model-video timing from the dense observation/action window."""
+
+    action_video_freq_ratio = _positive_int(
+        temporal.get("action_video_freq_ratio"),
+        name="FastWAM temporal.action_video_freq_ratio",
+    )
+    num_video_frames = _positive_int(
+        temporal.get("video_frames"),
+        name="FastWAM temporal.video_frames",
+    )
+    if action_horizon % action_video_freq_ratio != 0:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM action_horizon must be divisible by action_video_freq_ratio: "
+            f"action_horizon={action_horizon}, "
+            f"action_video_freq_ratio={action_video_freq_ratio}"
+        )
+    expected_video_frames = action_horizon // action_video_freq_ratio + 1
+    if num_video_frames != expected_video_frames:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM video_frames mismatch: "
+            f"expected={expected_video_frames}, actual={num_video_frames}"
+        )
+    return (
+        action_video_freq_ratio,
+        num_video_frames,
+        observation_fps / action_video_freq_ratio,
+    )
+
+
 def inspect_fastwam_checkpoint_contract(
     pretrained_path: str | Path,
     *,
@@ -737,6 +774,11 @@ def inspect_fastwam_checkpoint_contract(
     )
     if num_frames != chunk_size + 1:
         raise FrankaAsyncPolicyContractError("FastWAM num_frames must equal action_horizon + 1")
+    action_video_freq_ratio, num_video_frames, video_fps = _derive_fastwam_video_timing(
+        temporal,
+        observation_fps=observation_fps,
+        action_horizon=chunk_size,
+    )
     action_fps = observation_fps
     if expected_fps is not None and expected_fps != observation_fps:
         raise FrankaAsyncPolicyContractError(
@@ -801,7 +843,11 @@ def inspect_fastwam_checkpoint_contract(
         raise FrankaAsyncPolicyContractError(
             f"FastWAM runtime video_size must be {[image_height, image_width * 2]}"
         )
-    if train.get("concat_multi_camera") != "horizontal" or train.get("num_frames") != num_frames:
+    if (
+        train.get("concat_multi_camera") != "horizontal"
+        or train.get("num_frames") != num_frames
+        or train.get("action_video_freq_ratio") != action_video_freq_ratio
+    ):
         raise FrankaAsyncPolicyContractError("FastWAM runtime temporal/image concatenation mismatch")
     if (
         processor.get("proprio_output_dim") != FASTWAM_STATE_DIM
@@ -884,7 +930,9 @@ def inspect_fastwam_checkpoint_contract(
         observation_fps=observation_fps,
         action_fps=action_fps,
         chunk_size=chunk_size,
-        num_video_frames=num_frames,
+        action_video_freq_ratio=action_video_freq_ratio,
+        num_video_frames=num_video_frames,
+        video_fps=video_fps,
         image_height=image_height,
         image_width=image_width,
         context_len=context_len,
@@ -1121,7 +1169,7 @@ def _save_fastwam_joint_video(
     video: list[Image.Image],
     *,
     output_dir: str,
-    fps: int,
+    fps: float,
     timestep: int,
 ) -> Path:
     """Write one decoded FastWAM joint-inference video as an MP4."""
@@ -1740,11 +1788,14 @@ class FrankaFastWAMPolicyServer(PolicyServer):
         self._checkpoint_contract = contract
         self._fastwam_runtime = runtime
         self.logger.info(
-            "Loaded Franka FastWAM checkpoint from %s | task=%r fps=%s chunk_size=%s step=%s",
+            "Loaded Franka FastWAM checkpoint from %s | "
+            "task=%r fps=%s chunk_size=%s video_frames=%s video_fps=%s step=%s",
             contract.checkpoint_path,
             contract.task_instruction,
             contract.observation_fps,
             contract.chunk_size,
+            contract.num_video_frames,
+            contract.video_fps,
             contract.checkpoint_step,
         )
         return runtime.model
@@ -1882,10 +1933,15 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                     saved_path = _save_fastwam_joint_video(
                         joint_video,
                         output_dir=output_dir,
-                        fps=contract.observation_fps,
+                        fps=contract.video_fps,
                         timestep=observation_t.get_timestep(),
                     )
-                    self.logger.info("Saved FastWAM joint video to %s", saved_path)
+                    self.logger.info(
+                        "Saved FastWAM joint video to %s | frames=%s fps=%s",
+                        saved_path,
+                        len(joint_video),
+                        contract.video_fps,
+                    )
                 else:
                     self.logger.debug(
                         "FastWAM joint video inference produced %s frames", len(joint_video)
