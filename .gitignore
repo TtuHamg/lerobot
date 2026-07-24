@@ -187,3 +187,6 @@ franka_project/cmd.txt
 tests/
 logs/
 notebook/
+*md
+!docs/**/*.md
+!src/**/*.md
