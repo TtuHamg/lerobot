@@ -5,4 +5,11 @@ __pycache__/
 data/
 experiments/
 checkpoints/
-environment/wandb/
+environment/
+runs/
+
+artifacts/
+reports/
+notebook/
+*md
+!README.md

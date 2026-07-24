@@ -81,6 +81,20 @@ class PolicyServerConfig:
         default=None, metadata={"help": "Number of actions returned per chunk"}
     )
     policy_device: str | None = field(default=None, metadata={"help": "Device for policy inference"})
+    fastwam_joint_video_inference: bool = field(
+        default=False,
+        metadata={
+            "help": "For policy_type='fastwam', jointly denoise the checkpoint's future video and action. "
+            "The generated video stays server-local; only actions are returned to the client."
+        },
+    )
+    fastwam_joint_video_output_dir: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional directory for MP4s from FastWAM joint video inference. "
+            "Requires fastwam_joint_video_inference=true."
+        },
+    )
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -114,6 +128,9 @@ class PolicyServerConfig:
         if self.policy_device == "":
             raise ValueError("policy_device cannot be empty")
 
+        if self.fastwam_joint_video_output_dir == "":
+            raise ValueError("fastwam_joint_video_output_dir cannot be empty")
+
     @classmethod
     def from_dict(cls, config_dict: dict) -> "PolicyServerConfig":
         """Create a PolicyServerConfig from a dictionary."""
@@ -137,6 +154,8 @@ class PolicyServerConfig:
             "pretrained_name_or_path": self.pretrained_name_or_path,
             "actions_per_chunk": self.actions_per_chunk,
             "policy_device": self.policy_device,
+            "fastwam_joint_video_inference": self.fastwam_joint_video_inference,
+            "fastwam_joint_video_output_dir": self.fastwam_joint_video_output_dir,
         }
 
 

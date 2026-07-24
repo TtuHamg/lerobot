@@ -184,3 +184,6 @@ output_lerobot/
 log/
 logs/
 franka_project/cmd.txt
+tests/
+logs/
+notebook/

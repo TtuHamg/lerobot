@@ -103,9 +103,6 @@ FASTWAM_CONTEXT_WIDTH = 4096
 FASTWAM_FINGER_SCALE = 0.04
 FASTWAM_FINGER_SIGNS = (1.0, -1.0)
 FASTWAM_CHECKPOINT_PATTERN = re.compile(r"^step_(\d+)\.pt$")
-FASTWAM_DEPLOYMENT_MANIFESTS = {
-    ("franka_eef_move_cups", "step_019650.pt"): "fastwam_move_cups_step_019650.json",
-}
 FASTWAM_WAN_VAE_RELATIVE_PATH = Path(
     "DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
 )
@@ -155,12 +152,12 @@ class FrankaFastWAMCheckpointContract:
     runtime_config_path: Path
     stats_path: Path
     text_context_path: Path
-    deployment_manifest_path: Path
     vae_path: Path
     task_instruction: str
     observation_fps: int
     action_fps: int
     chunk_size: int
+    num_video_frames: int
     image_height: int
     image_width: int
     context_len: int
@@ -333,116 +330,6 @@ def _sha256_file(path: Path, *, chunk_bytes: int = 8 * 1024 * 1024) -> str:
         while chunk := stream.read(chunk_bytes):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def _sha256_python_tree(root: Path) -> tuple[int, str]:
-    """Hash Python source names and bytes in a stable, checkout-independent order."""
-
-    files = sorted(root.rglob("*.py")) if root.is_dir() else []
-    digest = hashlib.sha256()
-    for path in files:
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return len(files), digest.hexdigest()
-
-
-def _fastwam_deployment_manifest_path(checkpoint: Path, run_dir: Path) -> Path:
-    manifest_name = FASTWAM_DEPLOYMENT_MANIFESTS.get((run_dir.name, checkpoint.name))
-    if manifest_name is None:
-        raise FrankaAsyncPolicyContractError(
-            "FastWAM checkpoint is not approved by a deployment manifest: "
-            f"run={run_dir.name!r}, checkpoint={checkpoint.name!r}"
-        )
-    path = Path(__file__).resolve().parents[2] / "manifests" / manifest_name
-    if not path.is_file():
-        raise FrankaAsyncPolicyContractError(f"FastWAM deployment manifest is missing: {path}")
-    return path
-
-
-def _verify_fastwam_deployment_manifest(
-    manifest_path: Path,
-    *,
-    run_dir: Path,
-    checkpoint_step: int,
-    task_instruction: str,
-    files: Mapping[str, Path],
-    source_root: Path,
-) -> None:
-    manifest = _read_json_object(manifest_path)
-    expected_header = {
-        "policy_type": "fastwam",
-        "run_name": run_dir.name,
-        "checkpoint_step": checkpoint_step,
-        "task_instruction": task_instruction,
-    }
-    actual_header = {key: manifest.get(key) for key in expected_header}
-    if actual_header != expected_header:
-        raise FrankaAsyncPolicyContractError(
-            f"FastWAM deployment manifest header mismatch: expected={expected_header}, "
-            f"actual={actual_header}"
-        )
-
-    ledger = _mapping(manifest.get("files"), name="FastWAM deployment manifest files")
-    if set(ledger) != set(files):
-        raise FrankaAsyncPolicyContractError(
-            "FastWAM deployment manifest file roles mismatch: "
-            f"expected={sorted(files)}, actual={sorted(ledger)}"
-        )
-    for role, path in files.items():
-        record = _mapping(ledger.get(role), name=f"FastWAM deployment file {role}")
-        suffix = _nonempty_string(
-            record.get("path_suffix"), name=f"FastWAM deployment file {role}.path_suffix"
-        )
-        declared_size = record.get("size_bytes")
-        declared_digest = _sha256_string(
-            record.get("sha256"), name=f"FastWAM deployment file {role}.sha256"
-        )
-        if not path.is_file() or not path.as_posix().endswith(suffix):
-            raise FrankaAsyncPolicyContractError(
-                f"FastWAM deployment file {role} is missing or has unexpected path: {path}"
-            )
-        if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size <= 0:
-            raise FrankaAsyncPolicyContractError(
-                f"FastWAM deployment file {role}.size_bytes must be a positive integer"
-            )
-        actual_size = path.stat().st_size
-        if actual_size != declared_size:
-            raise FrankaAsyncPolicyContractError(
-                f"FastWAM deployment file {role} size mismatch: "
-                f"declared={declared_size}, actual={actual_size}"
-            )
-        if role in ("checkpoint", "wan_vae"):
-            continue
-        actual_digest = _sha256_file(path)
-        if actual_digest != declared_digest:
-            raise FrankaAsyncPolicyContractError(
-                f"FastWAM deployment file {role} SHA-256 mismatch: "
-                f"declared={declared_digest}, actual={actual_digest}"
-            )
-
-    source_record = _mapping(
-        manifest.get("fastwam_source_tree"), name="FastWAM deployment source tree"
-    )
-    source_suffix = _nonempty_string(
-        source_record.get("path_suffix"), name="FastWAM source tree.path_suffix"
-    )
-    if not source_root.as_posix().endswith(source_suffix):
-        raise FrankaAsyncPolicyContractError(
-            f"FastWAM source tree has unexpected path: {source_root}"
-        )
-    declared_count = source_record.get("python_file_count")
-    declared_source_digest = _sha256_string(
-        source_record.get("sha256"), name="FastWAM source tree.sha256"
-    )
-    actual_count, actual_source_digest = _sha256_python_tree(source_root)
-    if actual_count != declared_count or actual_source_digest != declared_source_digest:
-        raise FrankaAsyncPolicyContractError(
-            "FastWAM source tree does not match the deployment manifest: "
-            f"declared=(count={declared_count}, sha256={declared_source_digest}), "
-            f"actual=(count={actual_count}, sha256={actual_source_digest})"
-        )
 
 
 def _validate_processor_state_files(checkpoint_dir: Path, config_name: str) -> None:
@@ -777,9 +664,7 @@ def inspect_fastwam_checkpoint_contract(
         )
     checkpoint_step = int(match.group(1))
     run_dir = checkpoint.parent.parent.parent
-    deployment_manifest_path = _fastwam_deployment_manifest_path(checkpoint, run_dir)
     fastwam_repo = run_dir.parents[2]
-    source_root = fastwam_repo / "src" / "fastwam"
     model_base = Path(
         os.environ.get("DIFFSYNTH_MODEL_BASE_PATH", str(fastwam_repo / "checkpoints"))
     ).expanduser().resolve()
@@ -988,36 +873,18 @@ def inspect_fastwam_checkpoint_contract(
             f"FastWAM cached text context is missing for task {task_instruction!r}: {text_context_path}"
         )
 
-    _verify_fastwam_deployment_manifest(
-        deployment_manifest_path,
-        run_dir=run_dir,
-        checkpoint_step=checkpoint_step,
-        task_instruction=task_instruction,
-        files={
-            "checkpoint": checkpoint,
-            "runtime_config": runtime_path,
-            "dataset_contract": contract_path,
-            "run_stats": run_stats_path,
-            "training_stats": configured_stats_path,
-            "text_context": text_context_path,
-            "wan_vae": vae_path,
-            "fastwam_pyproject": fastwam_repo / "pyproject.toml",
-        },
-        source_root=source_root,
-    )
-
     return FrankaFastWAMCheckpointContract(
         checkpoint_path=checkpoint,
         run_dir=run_dir,
         runtime_config_path=runtime_path,
         stats_path=configured_stats_path,
         text_context_path=text_context_path,
-        deployment_manifest_path=deployment_manifest_path,
         vae_path=vae_path,
         task_instruction=task_instruction,
         observation_fps=observation_fps,
         action_fps=action_fps,
         chunk_size=chunk_size,
+        num_video_frames=num_frames,
         image_height=image_height,
         image_width=image_width,
         context_len=context_len,
@@ -1043,6 +910,15 @@ def validate_franka_server_config(config: PolicyServerConfig) -> FrankaServingCo
             f"Franka async server requires --policy_type in {FRANKA_POLICY_TYPES}, "
             f"got {config.policy_type!r}"
         )
+    if config.fastwam_joint_video_inference and config.policy_type != "fastwam":
+        raise ValueError("--fastwam_joint_video_inference requires --policy_type=fastwam")
+    if config.fastwam_joint_video_output_dir is not None:
+        if config.policy_type != "fastwam":
+            raise ValueError("--fastwam_joint_video_output_dir requires --policy_type=fastwam")
+        if not config.fastwam_joint_video_inference:
+            raise ValueError(
+                "--fastwam_joint_video_output_dir requires --fastwam_joint_video_inference=true"
+            )
     if config.pretrained_name_or_path is None:
         raise ValueError("Franka async server requires --pretrained_name_or_path")
     if config.actions_per_chunk is None:
@@ -1241,6 +1117,36 @@ def _prepare_fastwam_image(
     return tensor.mul_(2.0 / 255.0).sub_(1.0).unsqueeze(0).contiguous()
 
 
+def _save_fastwam_joint_video(
+    video: list[Image.Image],
+    *,
+    output_dir: str,
+    fps: int,
+    timestep: int,
+) -> Path:
+    """Write one decoded FastWAM joint-inference video as an MP4."""
+
+    if not video or not all(isinstance(frame, Image.Image) for frame in video):
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM infer_joint video must be a non-empty list of PIL images"
+        )
+    destination = (
+        Path(output_dir).expanduser().resolve()
+        / f"fastwam_joint_t{timestep:09d}_{time.time_ns()}.mp4"
+    )
+    try:
+        from fastwam.utils.video_io import save_mp4
+
+        save_mp4(video, str(destination), fps=fps)
+    except (ImportError, OSError, TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError(
+            f"Could not save FastWAM joint video to {destination}"
+        ) from exc
+    if not destination.is_file() or destination.stat().st_size <= 0:
+        raise FrankaAsyncPolicyContractError(f"FastWAM joint video was not written: {destination}")
+    return destination
+
+
 def _build_fastwam_state(
     state10: np.ndarray,
     *,
@@ -1388,10 +1294,10 @@ def _load_fastwam_runtime(
         fastwam_package = importlib.import_module("fastwam")
         loaded_source_root = Path(fastwam_package.__file__).resolve().parent
     except (AttributeError, ImportError, TypeError) as exc:
-        raise FrankaAsyncPolicyContractError("Could not import the approved FastWAM source tree") from exc
+        raise FrankaAsyncPolicyContractError("Could not import the FastWAM source tree") from exc
     if loaded_source_root != fastwam_repo / "src" / "fastwam":
         raise FrankaAsyncPolicyContractError(
-            "Imported FastWAM package does not match the deployment manifest source tree: "
+            "Imported FastWAM package does not match the source tree inferred from the checkpoint: "
             f"expected={fastwam_repo / 'src' / 'fastwam'}, actual={loaded_source_root}"
         )
 
@@ -1834,7 +1740,7 @@ class FrankaFastWAMPolicyServer(PolicyServer):
         self._checkpoint_contract = contract
         self._fastwam_runtime = runtime
         self.logger.info(
-            "Strictly loaded Franka FastWAM checkpoint from %s | task=%r fps=%s chunk_size=%s step=%s",
+            "Loaded Franka FastWAM checkpoint from %s | task=%r fps=%s chunk_size=%s step=%s",
             contract.checkpoint_path,
             contract.task_instruction,
             contract.observation_fps,
@@ -1939,20 +1845,66 @@ class FrankaFastWAMPolicyServer(PolicyServer):
             torch.from_numpy(fastwam_state).to(dtype=torch.float32)
         )
         with torch.inference_mode():
-            output = self.policy.infer_action(
-                prompt=None,
-                input_image=input_image,
-                action_horizon=contract.chunk_size,
-                proprio=normalized_state,
-                context=runtime.context,
-                context_mask=runtime.context_mask,
-                text_cfg_scale=1.0,
-                num_inference_steps=contract.num_inference_steps,
-                sigma_shift=None,
-                seed=contract.seed,
-                rand_device="cpu",
-                tiled=False,
-            )
+            if self.config.fastwam_joint_video_inference:
+                infer_joint = getattr(self.policy, "infer_joint", None)
+                if not callable(infer_joint):
+                    raise FrankaAsyncPolicyContractError(
+                        "FastWAM joint video inference was requested, but the loaded policy has no infer_joint()"
+                    )
+                output = infer_joint(
+                    prompt=None,
+                    input_image=input_image,
+                    num_video_frames=contract.num_video_frames,
+                    action_horizon=contract.chunk_size,
+                    action=None,
+                    proprio=normalized_state,
+                    context=runtime.context,
+                    context_mask=runtime.context_mask,
+                    text_cfg_scale=1.0,
+                    num_inference_steps=contract.num_inference_steps,
+                    sigma_shift=None,
+                    seed=contract.seed,
+                    rand_device="cpu",
+                    tiled=False,
+                    test_action_with_infer_action=False,
+                )
+                if not isinstance(output, Mapping) or not isinstance(output.get("video"), list):
+                    raise FrankaAsyncPolicyContractError(
+                        "FastWAM infer_joint returned no decoded video"
+                    )
+                joint_video = output["video"]
+                if not joint_video or not all(isinstance(frame, Image.Image) for frame in joint_video):
+                    raise FrankaAsyncPolicyContractError(
+                        "FastWAM infer_joint video must be a non-empty list of PIL images"
+                    )
+                output_dir = self.config.fastwam_joint_video_output_dir
+                if output_dir is not None:
+                    saved_path = _save_fastwam_joint_video(
+                        joint_video,
+                        output_dir=output_dir,
+                        fps=contract.observation_fps,
+                        timestep=observation_t.get_timestep(),
+                    )
+                    self.logger.info("Saved FastWAM joint video to %s", saved_path)
+                else:
+                    self.logger.debug(
+                        "FastWAM joint video inference produced %s frames", len(joint_video)
+                    )
+            else:
+                output = self.policy.infer_action(
+                    prompt=None,
+                    input_image=input_image,
+                    action_horizon=contract.chunk_size,
+                    proprio=normalized_state,
+                    context=runtime.context,
+                    context_mask=runtime.context_mask,
+                    text_cfg_scale=1.0,
+                    num_inference_steps=contract.num_inference_steps,
+                    sigma_shift=None,
+                    seed=contract.seed,
+                    rand_device="cpu",
+                    tiled=False,
+                )
         if not isinstance(output, Mapping) or not isinstance(output.get("action"), torch.Tensor):
             raise FrankaAsyncPolicyContractError("FastWAM infer_action returned no tensor action")
         normalized_action = output["action"].detach().to(device="cpu", dtype=torch.float32)

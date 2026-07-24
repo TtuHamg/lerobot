@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -49,6 +50,47 @@ if TYPE_CHECKING or _transformers_available:
 else:
     AutoProcessor = None
     AutoTokenizer = None
+
+try:
+    from huggingface_hub import try_to_load_from_cache
+except ImportError:
+    try_to_load_from_cache = None
+
+
+def _resolve_cached_tokenizer_path(tokenizer_name: str) -> str:
+    """Return a complete local tokenizer snapshot when one is already cached.
+
+    Some tokenizer implementations perform auxiliary Hub requests while loading a
+    repository id, even when all tokenizer files are already present in the
+    Hugging Face cache. Loading the snapshot directory directly avoids those
+    requests and still falls back to the repository id when the cache is absent
+    or incomplete.
+    """
+    tokenizer_path = Path(tokenizer_name).expanduser()
+    if tokenizer_path.is_dir():
+        return str(tokenizer_path)
+
+    if try_to_load_from_cache is None:
+        return tokenizer_name
+
+    try:
+        tokenizer_config_path = try_to_load_from_cache(tokenizer_name, "tokenizer_config.json")
+    except Exception as exc:  # Cache lookup must never prevent the normal Hub fallback.
+        logging.debug("Could not inspect tokenizer cache for %r: %s", tokenizer_name, exc)
+        return tokenizer_name
+
+    if not isinstance(tokenizer_config_path, str):
+        return tokenizer_name
+
+    snapshot_dir = Path(tokenizer_config_path).parent
+    has_tokenizer_data = any(
+        (snapshot_dir / filename).is_file()
+        for filename in ("tokenizer.json", "tokenizer.model", "spiece.model", "vocab.txt")
+    )
+    if has_tokenizer_data:
+        return str(snapshot_dir)
+
+    return tokenizer_name
 
 
 @dataclass
@@ -108,7 +150,8 @@ class TokenizerProcessorStep(ObservationProcessorStep):
         elif self.tokenizer_name is not None:
             if AutoTokenizer is None:
                 raise ImportError("AutoTokenizer is not available")
-            self.input_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+            tokenizer_source = _resolve_cached_tokenizer_path(self.tokenizer_name)
+            self.input_tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
         else:
             raise ValueError(
                 "Either 'tokenizer' or 'tokenizer_name' must be provided. "
