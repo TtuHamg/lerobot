@@ -13,3 +13,4 @@ reports/
 notebook/
 *md
 !README.md
+!markdown/*.md

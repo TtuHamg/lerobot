@@ -190,10 +190,12 @@ notebook/
 *md
 !docs/**/*.md
 !src/**/*.md
-!AGENT_GUIDE.md
+!AGENTS.md
 !AGENT_GUIDE.md
 !AI_POLICY.md
 !CLAUDE.md
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !SECURITY.md
+
+!markdown/*.md
