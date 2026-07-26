@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -32,6 +33,8 @@ AGGREGATE_FUNCTIONS = {
     "average": lambda old, new: 0.5 * old + 0.5 * new,
     "conservative": lambda old, new: 0.7 * old + 0.3 * new,
 }
+
+OBSERVATION_TRIGGER_MODES = ("queue_and_plan", "post_action_delay")
 
 
 def get_aggregate_function(name: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
@@ -221,6 +224,22 @@ class RobotClientConfig:
             "another observation."
         },
     )
+    observation_trigger_mode: str = field(
+        default="queue_and_plan",
+        metadata={
+            "help": "Observation trigger mode. 'queue_and_plan' preserves the normal queue threshold and "
+            "robot execution gates. 'post_action_delay' ignores those gates and sends the next observation "
+            "only after post_action_observation_delay_s has elapsed since a successfully committed action "
+            "chunk."
+        },
+    )
+    post_action_observation_delay_s: float = field(
+        default=5.0,
+        metadata={
+            "help": "Delay from a successfully committed action chunk to the next observation when "
+            "observation_trigger_mode='post_action_delay'."
+        },
+    )
     fps: int = field(default=DEFAULT_FPS, metadata={"help": "Frames per second"})
 
     # Aggregate function configuration (CLI-compatible)
@@ -273,6 +292,30 @@ class RobotClientConfig:
                 f"pending_observation_timeout_s must be positive, got {self.pending_observation_timeout_s}"
             )
 
+        if self.observation_trigger_mode not in OBSERVATION_TRIGGER_MODES:
+            raise ValueError(
+                f"observation_trigger_mode must be one of {OBSERVATION_TRIGGER_MODES}, "
+                f"got {self.observation_trigger_mode!r}"
+            )
+
+        if (
+            isinstance(self.post_action_observation_delay_s, bool)
+            or not isinstance(self.post_action_observation_delay_s, (int, float))
+            or not math.isfinite(float(self.post_action_observation_delay_s))
+            or self.post_action_observation_delay_s <= 0
+        ):
+            raise ValueError(
+                "post_action_observation_delay_s must be a finite positive number, "
+                f"got {self.post_action_observation_delay_s!r}"
+            )
+
+        if self.observation_trigger_mode == "post_action_delay" and not self.enable_pending_observation:
+            raise ValueError(
+                "observation_trigger_mode='post_action_delay' requires "
+                "enable_pending_observation=true to prevent repeated observations before the next action "
+                "chunk arrives"
+            )
+
         if self.fps <= 0:
             raise ValueError(f"fps must be positive, got {self.fps}")
 
@@ -298,6 +341,8 @@ class RobotClientConfig:
             "action_offset": self.action_offset,
             "enable_pending_observation": self.enable_pending_observation,
             "pending_observation_timeout_s": self.pending_observation_timeout_s,
+            "observation_trigger_mode": self.observation_trigger_mode,
+            "post_action_observation_delay_s": self.post_action_observation_delay_s,
             "fps": self.fps,
             "actions_per_chunk": self.actions_per_chunk,
             "task": self.task,

@@ -146,7 +146,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --task='pick up the potato chip' \
   --policy_type=pi0 \
   --pretrained_name_or_path=server-owned \
-  --policy_device=cpu \
+  --policy_device=cuda \
   --client_device=cpu \
   --actions_per_chunk=50 \
   --action_offset=1 \
@@ -207,7 +207,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --task='grab the paper cup.' \
   --policy_type=pi0 \
   --pretrained_name_or_path=server-owned \
-  --policy_device=cpu \
+  --policy_device=cuda \
   --client_device=cpu \
   --actions_per_chunk=50 \
   --robot.max_action_chunk_waypoints=25 \
@@ -329,12 +329,13 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --task='move the paper cup from one end of the can to the other.' \
   --policy_type=fastwam \
   --pretrained_name_or_path=server-owned \
-  --policy_device=cpu \
+  --policy_device=cuda \
   --client_device=cpu \
   --actions_per_chunk=32 \
+  --robot.max_action_chunk_waypoints=25 \
   --action_offset=1 \
   --fps=30 \
-  --chunk_size_threshold=0.5 \
+  --chunk_size_threshold=0.0 \
   --aggregate_fn_name=latest_only \
   --enable_pending_observation=true \
   --pending_observation_timeout_s=30 \

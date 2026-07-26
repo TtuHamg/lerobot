@@ -56,6 +56,8 @@ SELECTED_OPTION_NAMES = (
     "aggregate_fn_name",
     "enable_pending_observation",
     "pending_observation_timeout_s",
+    "observation_trigger_mode",
+    "post_action_observation_delay_s",
     "debug_visualize_queue_size",
     "robot.type",
     "robot.id",

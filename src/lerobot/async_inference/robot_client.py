@@ -27,6 +27,8 @@ python src/lerobot/async_inference/robot_client.py \
     --action_offset=1 \
     --enable_pending_observation=True \
     --pending_observation_timeout_s=2.0 \
+    --observation_trigger_mode=queue_and_plan \
+    --post_action_observation_delay_s=5.0 \
     --aggregate_fn_name=weighted_average \
     --debug_visualize_queue_size=True
 ```
@@ -66,7 +68,7 @@ from lerobot.transport import (
 from lerobot.transport.utils import grpc_channel_options, send_bytes_in_chunks
 from lerobot.utils.import_utils import register_third_party_plugins
 
-from .configs import RobotClientConfig
+from .configs import OBSERVATION_TRIGGER_MODES, RobotClientConfig
 from .helpers import (
     ASYNC_INFERENCE_PROTOCOL_VERSION,
     Action,
@@ -131,6 +133,8 @@ class RobotClient:
         self._pending_observation_request_id: str | None = None
         self._pending_observation_value: TimedObservation | None = None
         self._pending_observation_retry_due = False
+        self._post_action_observation_lock = threading.Lock()
+        self._post_action_observation_deadline_s: float | None = None
         self._client_session_id = uuid.uuid4().hex
         self._next_observation_sequence = 0
         self._committed_action_chunks_lock = threading.Lock()
@@ -391,7 +395,7 @@ class RobotClient:
         self,
         incoming_actions: list[TimedAction],
         aggregate_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-    ):
+    ) -> int:
         """Finds the same timestep actions in the queue and aggregates them using the aggregate_fn"""
         if aggregate_fn is None:
             # default aggregate function: take the latest action
@@ -431,6 +435,27 @@ class RobotClient:
 
         with self.action_queue_lock:
             self.action_queue = future_action_queue
+        return future_action_queue.qsize()
+
+    def _arm_post_action_observation_delay(self, committed_action_count: int) -> None:
+        """Start the observation delay after an action chunk commit succeeds.
+
+        For the Franka client, ``_aggregate_action_queues`` returns only after
+        the complete ROS2 action chunk has been published successfully. Using
+        that return boundary keeps this mode independent of Gateway/Controller
+        ACKs while still measuring the full delay from local ROS publication.
+        """
+
+        if self.config.observation_trigger_mode != "post_action_delay":
+            return
+        deadline_s = time.perf_counter() + self.config.post_action_observation_delay_s
+        with self._post_action_observation_lock:
+            self._post_action_observation_deadline_s = deadline_s
+        self.logger.info(
+            "[OBSERVATION_GATE] Armed post-action delay %.3fs after committing %d actions",
+            self.config.post_action_observation_delay_s,
+            committed_action_count,
+        )
 
     def receive_actions(self, verbose: bool = False):
         """Receive actions from the policy server"""
@@ -532,8 +557,12 @@ class RobotClient:
 
                 # Update action queue
                 start_time = time.perf_counter()
-                self._aggregate_action_queues(timed_actions, self.config.aggregate_fn)
+                committed_action_count = self._aggregate_action_queues(
+                    timed_actions, self.config.aggregate_fn
+                )
                 queue_update_time = time.perf_counter() - start_time
+                if committed_action_count:
+                    self._arm_post_action_observation_delay(committed_action_count)
 
                 # This is the transport commit boundary. In the Franka client,
                 # the override returns only after the ROS chunk publication has
@@ -622,8 +651,9 @@ class RobotClient:
 
         return _performed_action
 
-    def _ready_to_send_observation(self):
-        """Flags when the client is ready to send an observation"""
+    def _pending_observation_allows_send(self) -> bool:
+        """Apply only the single-in-flight observation and retry gate."""
+
         if self.config.enable_pending_observation:
             with self._pending_observation_lock:
                 if self._pending_observation:
@@ -645,6 +675,22 @@ class RobotClient:
                     self._pending_observation_value = None
                     self._pending_observation_retry_due = False
 
+        return True
+
+    def _ready_to_send_observation(self):
+        """Flags when the client is ready to send an observation."""
+
+        if not self._pending_observation_allows_send():
+            return False
+
+        trigger_mode = getattr(self.config, "observation_trigger_mode", OBSERVATION_TRIGGER_MODES[0])
+        if trigger_mode == "post_action_delay":
+            with self._post_action_observation_lock:
+                deadline_s = self._post_action_observation_deadline_s
+            # No action has been committed yet, so the initial observation is
+            # sent immediately. Every later action commit arms a new deadline.
+            return deadline_s is None or time.perf_counter() >= deadline_s
+
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
@@ -659,6 +705,20 @@ class RobotClient:
                 )
                 self._send_observation_rpc(retry_observation)
                 return retry_observation.get_observation()
+
+            if (
+                getattr(self.config, "observation_trigger_mode", OBSERVATION_TRIGGER_MODES[0])
+                == "post_action_delay"
+            ):
+                with self._post_action_observation_lock:
+                    deadline_s = self._post_action_observation_deadline_s
+                if deadline_s is not None:
+                    overrun_ms = max(0.0, time.perf_counter() - deadline_s) * 1000
+                    self.logger.info(
+                        "[OBSERVATION_GATE] Post-action delay elapsed; capturing observation "
+                        "(scheduler_overrun=%.2fms)",
+                        overrun_ms,
+                    )
 
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
@@ -679,7 +739,16 @@ class RobotClient:
 
             # If there are no actions left in the queue, the observation must go through processing!
             with self.action_queue_lock:
-                observation.must_go = self.must_go.is_set() and self.action_queue.empty()
+                if (
+                    getattr(self.config, "observation_trigger_mode", OBSERVATION_TRIGGER_MODES[0])
+                    == "post_action_delay"
+                ):
+                    # This diagnostic mode deliberately ignores the local
+                    # queue. Its scheduled observation must still reach
+                    # inference even when actions remain locally queued.
+                    observation.must_go = True
+                else:
+                    observation.must_go = self.must_go.is_set() and self.action_queue.empty()
                 current_queue_size = self.action_queue.qsize()
 
             _ = self.send_observation(observation)

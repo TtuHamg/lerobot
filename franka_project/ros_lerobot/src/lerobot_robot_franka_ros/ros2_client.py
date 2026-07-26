@@ -114,6 +114,12 @@ class FrankaRos2RobotClient(RobotClient):
             raise TypeError("franka_ros plugin did not construct a FrankaRos instance")
 
     def _ready_to_send_observation(self):
+        if self.config.observation_trigger_mode == "post_action_delay":
+            # The base class retains the pending-observation protection and
+            # checks only the post-publication monotonic deadline in this mode.
+            # Deliberately do not consult the queue or ROS execution status.
+            return super()._ready_to_send_observation()
+
         # The stock check runs first: it owns the pending-observation
         # bookkeeping and the queue-threshold decision on the nominal clock.
         if not super()._ready_to_send_observation():
@@ -129,7 +135,7 @@ class FrankaRos2RobotClient(RobotClient):
         limit = self.config.robot.max_action_chunk_waypoints
         return received_size if limit is None else min(received_size, limit)
 
-    def _aggregate_action_queues(self, incoming_actions, aggregate_fn=None):
+    def _aggregate_action_queues(self, incoming_actions, aggregate_fn=None) -> int:
         if not isinstance(incoming_actions, list):
             raise TypeError("Incoming action chunk must be a list")
         if incoming_actions and not all(isinstance(action, TimedAction) for action in incoming_actions):
@@ -174,6 +180,7 @@ class FrankaRos2RobotClient(RobotClient):
                 self.shutdown_event.set()
                 self.logger.exception("ROS2 action chunk publication failed; stopping client")
                 raise
+        return len(accepted_actions)
 
 
 @draccus.wrap()
