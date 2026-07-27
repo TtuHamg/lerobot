@@ -10,6 +10,10 @@
 async protocol v2。PI0 schema 只作为 checkpoint provenance 保存，两种 schema 使用同一加载
 路径；client 和 server 都不需要 `--schema` 参数。
 
+如果要把一条 FastWAM `grab the paper cup.` 训练 observation 从 client 精确发送一次、保存
+一个 response 后退出，见 [`FASTWAM_FIXTURE.md`](./FASTWAM_FIXTURE.md)。该流程固定使用
+dry-run fixture，不执行 server 返回的动作。
+
 ## 1. 支持矩阵
 
 | Policy artifact | manifest header | server `--policy_type` | FPS | chunk | checkpoint 参数 |

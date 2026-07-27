@@ -8,6 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .geometry import (
+    encode_absolute_action,
     encode_relative_action,
     enforce_quaternion_continuity,
     matrix_to_rotation_6d,
@@ -363,6 +364,34 @@ def model_relative_action_chunks(
     return encode_relative_action(
         anchor_pose[:, :3],
         anchor_rotation,
+        absolute[..., :3],
+        target_rotation,
+        absolute[..., 7:8],
+    )
+
+
+def model_absolute_action_chunks(
+    carriers: DualRateCarriers,
+    anchors: IntArray,
+    *,
+    profile: str,
+    horizon_camera_intervals: int = 50,
+) -> FloatArray:
+    """Build model-visible absolute ``[anchor, K, 7]`` EEF target chunks.
+
+    The underlying carrier stays auditable as ``[xyz, quaternion_xyzw,
+    gripper]``.  The model label uses the principal absolute rotation vector
+    ``Log(R_target)`` so both supported label modes remain seven-dimensional.
+    """
+
+    absolute = absolute_action_chunks(
+        carriers,
+        np.asarray(anchors, dtype=np.int64),
+        profile=profile,
+        horizon_camera_intervals=horizon_camera_intervals,
+    )
+    target_rotation = quaternion_xyzw_to_matrix(absolute[..., 3:7])
+    return encode_absolute_action(
         absolute[..., :3],
         target_rotation,
         absolute[..., 7:8],

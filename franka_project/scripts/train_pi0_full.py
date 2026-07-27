@@ -40,7 +40,12 @@ PROJECT_SRC = PROJECT_ROOT / "src"
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from franka_eef_pipeline.dual_rate_dataset import CartesianAnchorDataset
+from franka_eef_pipeline.dual_rate_dataset import (
+    ACTION_LABEL_MODE_ABSOLUTE_EEF,
+    ACTION_LABEL_MODE_DELTA_EEF,
+    CartesianAnchorDataset,
+    resolve_action_label_spec,
+)
 from franka_eef_pipeline.pi0_training import (
     STRUCTURAL_ACTION_UNREACHABLE_NUMEL,
     STRUCTURAL_ACTION_UNREACHABLE_PARAMETER_SPECS,
@@ -826,14 +831,33 @@ def _geometry_manifest(profile: Mapping[str, Any]) -> dict[str, Any]:
     task_instruction = profile.get("task_instruction")
     if not isinstance(task_instruction, str) or not task_instruction.strip():
         raise TrainingContractError("dataset profile has no non-empty task_instruction")
+    action_label = resolve_action_label_spec(
+        profile, source="train_pi0_full._geometry_manifest dataset profile"
+    )
+    if action_label["mode"] == ACTION_LABEL_MODE_DELTA_EEF:
+        action_semantics = {
+            "translation": "base-frame target_xyz - current_xyz",
+            "rotation": "body rotvec Log(R_current.T @ R_target)",
+            "gripper": "future measured target gripper_0_1",
+        }
+    elif action_label["mode"] == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+        action_semantics = {
+            "translation": "absolute base-frame target_xyz",
+            "rotation": "principal base-frame rotvec Log(R_target)",
+            "gripper": "future measured absolute target gripper closed_0_1",
+        }
+    else:  # pragma: no cover - resolve_action_label_spec rejects this.
+        raise AssertionError(f"unreachable action label mode: {action_label['mode']}")
     return {
         "schema_version": 1,
         "task_instruction": task_instruction,
         "state10": "current measured EEF xyz + rotation6d(first two columns) + gripper_0_1",
         "action7": {
-            "translation": "base-frame target_xyz - current_xyz",
-            "rotation": "body rotvec Log(R_current.T @ R_target)",
-            "gripper": "future measured target gripper_0_1",
+            **action_semantics,
+            "action_label_mode": action_label["mode"],
+            "type": action_label["type"],
+            "names": action_label["names"],
+            "contract": action_label,
             "frequency_hz": int(profile["action_fps"]),
             "chunk_size": int(profile["chunk_size"]),
         },
@@ -1103,6 +1127,34 @@ def _runtime_dataset_contract(cfg: Mapping[str, Any], dataset: CartesianAnchorDa
         checks["task_instruction"] = expected["task_instruction"]
     mismatches = {key: {"expected": value, "actual": profile.get(key)} for key, value in checks.items()
                   if profile.get(key) != value}
+    if "action_label_mode" in expected:
+        try:
+            actual_action_label = resolve_action_label_spec(
+                profile, source=profile_path
+            )
+        except ValueError as error:
+            raise TrainingContractError(str(error)) from error
+        expected_action_label_mode = str(expected["action_label_mode"])
+        if actual_action_label["mode"] != expected_action_label_mode:
+            mismatches["action_label_mode"] = {
+                "expected": expected_action_label_mode,
+                "actual": actual_action_label["mode"],
+            }
+        if (
+            expected_action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF
+            and profile.get("action_label_mode_source")
+            != "config.contract.action_label_mode"
+        ):
+            mismatches["action_label_mode_source"] = {
+                "expected": "config.contract.action_label_mode",
+                "actual": profile.get("action_label_mode_source"),
+            }
+        adapter_action_label_mode = getattr(dataset, "action_label_mode", None)
+        if adapter_action_label_mode != expected_action_label_mode:
+            mismatches["adapter_action_label_mode"] = {
+                "expected": expected_action_label_mode,
+                "actual": adapter_action_label_mode,
+            }
     if mismatches:
         raise TrainingContractError(f"dataset profile mismatch: {mismatches}")
     task_instruction = profile.get("task_instruction")

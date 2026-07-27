@@ -55,8 +55,17 @@ from franka_eef_pipeline.action_chunk import (  # noqa: E402
     GripperMapping,
     align_episode_to_camera,
     build_dual_rate_carriers,
+    model_absolute_action_chunks,
     model_relative_action_chunks,
     valid_anchor_indices,
+)
+from franka_eef_pipeline.dual_rate_dataset import (  # noqa: E402
+    ABSOLUTE_CARRIER_NAMES,
+    ACTION_LABEL_MODE_ABSOLUTE_EEF,
+    ACTION_LABEL_MODE_DELTA_EEF,
+    STATE_NAMES,
+    resolve_data_config_action_label_spec,
+    resolve_action_label_spec,
 )
 from franka_eef_pipeline.mcap_reader import (  # noqa: E402
     load_episode_signals,
@@ -83,28 +92,7 @@ STATE_DIM = 10
 CARRIER_DIM = 8
 MODEL_ACTION_DIM = 7
 
-STATE_NAMES = [
-    "eef.x",
-    "eef.y",
-    "eef.z",
-    "eef.rot6d.col0.x",
-    "eef.rot6d.col0.y",
-    "eef.rot6d.col0.z",
-    "eef.rot6d.col1.x",
-    "eef.rot6d.col1.y",
-    "eef.rot6d.col1.z",
-    "gripper.closed_0_1",
-]
-CARRIER_NAMES = [
-    "target.x",
-    "target.y",
-    "target.z",
-    "target.qx",
-    "target.qy",
-    "target.qz",
-    "target.qw",
-    "target.gripper.closed_0_1",
-]
+CARRIER_NAMES = ABSOLUTE_CARRIER_NAMES
 
 
 class VerificationFailure(AssertionError):
@@ -428,6 +416,17 @@ def _verify_scope_and_profile(
         contract,
     )
     profile = view.profile
+    expected_action_label = resolve_data_config_action_label_spec(
+        config, source=config_path
+    )
+    action_label = resolve_action_label_spec(
+        profile, source=view.root / "meta/franka_eef_profile.json"
+    )
+    recorder.require(
+        "scope.config_profile_action_label_contract",
+        action_label == expected_action_label,
+        {"config": expected_action_label, "dataset": action_label},
+    )
     expected_ids = [str(item["episode_id"]) for item in expected_episodes]
     actual_ids = [str(item.get("raw_episode_id")) for item in view.episode_index]
     recorder.require(
@@ -501,8 +500,19 @@ def _verify_scope_and_profile(
             "observation_fps": profile.get("observation_fps"),
             "action_fps": profile.get("action_fps"),
             "chunk_size": profile.get("chunk_size"),
+            "action_label_mode": action_label["mode"],
         },
     )
+    if "action_label_mode" in contract:
+        recorder.require(
+            "scope.profile_action_label_mode_source",
+            profile.get("action_label_mode_source")
+            == "config.contract.action_label_mode",
+            {
+                "actual": profile.get("action_label_mode_source"),
+                "expected": "config.contract.action_label_mode",
+            },
+        )
 
     path_fields = (
         ("derived_manifest", manifest_path),
@@ -704,6 +714,12 @@ def _verify_stats_metadata(
         ),
     )
     effective = view.effective_stats
+    profile_action_label = resolve_action_label_spec(
+        view.profile, source=view.root / "meta/franka_eef_profile.json"
+    )
+    stats_action_label = resolve_action_label_spec(
+        effective, source=view.root / "meta/pi0_eef_stats.json"
+    )
     effective_ok = (
         int(effective.get("schema_version", -1)) == 1
         and effective.get("profile") == PROFILE
@@ -722,6 +738,7 @@ def _verify_stats_metadata(
         and effective.get("source_dataset_hash") == view.profile.get("source_dataset_hash")
         and effective.get("logical_anchor_index_sha256")
         == view.profile.get("logical_anchor_index_sha256")
+        and stats_action_label == profile_action_label
     )
     recorder.require(
         "stats.effective_native30_pi0",
@@ -933,6 +950,9 @@ def _verify_raw_replay(
     main_state = _column_numpy(view.main, STATE_KEY, np.float32)
     main_action = _column_numpy(view.main, ACTION_KEY, np.float32)
     positions = _raw_replay_positions(len(view.episode_index), mode)
+    action_label = resolve_action_label_spec(
+        view.profile, source=view.root / "meta/franka_eef_profile.json"
+    )
     states_for_stats: list[np.ndarray] = []
     actions_for_stats: list[np.ndarray] = []
 
@@ -1062,19 +1082,29 @@ def _verify_raw_replay(
         )
         if mode == "full":
             states_for_stats.append(carriers.observation_state[anchors].astype(np.float32))
-            actions_for_stats.append(
-                model_relative_action_chunks(
+            if action_label["mode"] == ACTION_LABEL_MODE_DELTA_EEF:
+                action_chunks = model_relative_action_chunks(
                     carriers,
                     anchors,
                     profile="action15",
                     horizon_camera_intervals=CHUNK_SIZE,
-                ).astype(np.float32)
-            )
+                )
+            elif action_label["mode"] == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+                action_chunks = model_absolute_action_chunks(
+                    carriers,
+                    anchors,
+                    profile="action15",
+                    horizon_camera_intervals=CHUNK_SIZE,
+                )
+            else:  # pragma: no cover - resolve_action_label_spec rejects this.
+                raise AssertionError(f"unreachable action label mode: {action_label['mode']}")
+            actions_for_stats.append(action_chunks.astype(np.float32))
 
     report: dict[str, Any] = {
         "mode": mode,
         "episodes_replayed": len(positions),
         "episode_positions": positions,
+        "action_label_mode": action_label["mode"],
     }
     if mode == "full":
         state = np.concatenate(states_for_stats, axis=0)
@@ -1213,6 +1243,9 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
     }
     suffix = ""
     try:
+        configured_action_label = resolve_data_config_action_label_spec(
+            config, source=config_path
+        )
         manifest_path, manifest, expected_episodes, suffix = _scope_episodes(
             config, args.limit_episodes, recorder
         )
@@ -1225,6 +1258,19 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         report["manifest"] = str(manifest_path)
         report["expected_episodes"] = len(expected_episodes)
         view = _load_view(root, recorder)
+        resolved_action_label = resolve_action_label_spec(
+            view.profile, source=root / "meta/franka_eef_profile.json"
+        )
+        report["action_label_mode"] = resolved_action_label["mode"]
+        report["action_label"] = resolved_action_label
+        recorder.require(
+            "scope.config_action_label_mode",
+            resolved_action_label == configured_action_label,
+            {
+                "config": configured_action_label,
+                "dataset": resolved_action_label,
+            },
+        )
         _verify_scope_and_profile(
             view,
             config,
@@ -1273,14 +1319,15 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     report_path = (
-        args.report_json or _default_report_path(config, args.mode, suffix)
+        args.report_json
+        or _default_report_path(config, args.mode, suffix)
     ).expanduser().resolve()
     report["report_json"] = str(report_path)
     _write_json(report_path, report)
     return report
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
@@ -1297,7 +1344,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--random-video-samples", type=int, default=3)
     parser.add_argument("--report-json", type=Path)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:

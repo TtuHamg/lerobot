@@ -1,0 +1,22 @@
+pi0 server:
+CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=pi0 \
+  --pretrained_name_or_path="/m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2/20260726T034535Z_pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2_2176f618/checkpoints/step-025520/pretrained_model" \
+  --actions_per_chunk=50 \
+  --policy_device=cuda
+
+pi0 client:
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_pi0_schema2   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.8   --task='grab the paper cup.'   --policy_type=pi0   --pretrained_name_or_path=server-owned   --policy_device=cpu   --client_device=cpu   --actions_per_chunk=50   --robot.max_action_chunk_waypoints=50   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map='{"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}' --observation_trigger_mode=post_action_delay --post_action_observation_delay_s=3
+
+
+fastwam server:
+CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py   --host=127.0.0.1   --port=15173   --fps=30   --inference_latency=0   --obs_queue_timeout=1   --observation_similarity_mode=none   --policy_type=fastwam   --pretrained_name_or_path="/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/franka_eef_grab_cups_v2/checkpoints/weights/step_030750.pt"   --actions_per_chunk=32   --policy_device=cuda --fastwam_joint_video_inference=true --fastwam_joint_video_output_dir=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/depoly_joint_videos
+
+fastwam client:
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_fastwam_schema1   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.8   --robot.gripper_max_skew_s=0.01   --task='grab the paper cup.'   --policy_type=fastwam   --pretrained_name_or_path=server-owned   --policy_device=cuda   --client_device=cpu   --actions_per_chunk=32   --robot.max_action_chunk_waypoints=25   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map={} --observation_trigger_mode=post_action_delay --post_action_observation_delay_s=3

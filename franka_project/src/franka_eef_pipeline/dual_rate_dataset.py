@@ -4,7 +4,8 @@ The adapter supports single-rate 15 Hz and native single-rate 30 Hz datasets.
 In both profiles the LeRobot table stores an auditable absolute carrier action
 with layout ``[xyz, quaternion_xyzw, gripper]``.  This module exposes only
 anchors marked valid by the conversion sidecars and converts each 50-row
-carrier window to the model-visible 7D Cartesian action online.
+carrier window to the metadata-selected model-visible 7D Cartesian label:
+anchor-relative delta EEF or absolute EEF with a principal rotation vector.
 
 The older 15 Hz-observation / 30 Hz-action dataset remains unsupported here. It
 requires a true dual-rate sidecar sampler and must never be interpreted as
@@ -25,7 +26,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .geometry import encode_relative_action, quaternion_xyzw_to_matrix, rotation_6d_to_matrix
+from .geometry import (
+    encode_absolute_action,
+    encode_relative_action,
+    quaternion_xyzw_to_matrix,
+    rotation_6d_to_matrix,
+)
 from .stats import REQUIRED_STATS, canonical_sha256
 
 
@@ -44,6 +50,14 @@ NATIVE30_CHUNK_SIZE = 50
 STATE_DIM = 10
 ABSOLUTE_CARRIER_DIM = 8
 MODEL_ACTION_DIM = 7
+
+ACTION_LABEL_MODE_DELTA_EEF = "delta_eef"
+ACTION_LABEL_MODE_ABSOLUTE_EEF = "absolute_eef"
+DEFAULT_ACTION_LABEL_MODE = ACTION_LABEL_MODE_DELTA_EEF
+SUPPORTED_ACTION_LABEL_MODES = (
+    ACTION_LABEL_MODE_DELTA_EEF,
+    ACTION_LABEL_MODE_ABSOLUTE_EEF,
+)
 
 SUPPORTED_PROFILE_SPECS = {
     ACTION15_PROFILE: (
@@ -64,7 +78,31 @@ DEFAULT_CAMERA_KEY_MAP = {
     "observation.images.camera2": "observation.images.left_wrist_0_rgb",
 }
 
-MODEL_ACTION_NAMES = [
+STATE_NAMES = [
+    "eef.x",
+    "eef.y",
+    "eef.z",
+    "eef.rot6d.col0.x",
+    "eef.rot6d.col0.y",
+    "eef.rot6d.col0.z",
+    "eef.rot6d.col1.x",
+    "eef.rot6d.col1.y",
+    "eef.rot6d.col1.z",
+    "gripper.closed_0_1",
+]
+
+ABSOLUTE_CARRIER_NAMES = [
+    "target.x",
+    "target.y",
+    "target.z",
+    "target.qx",
+    "target.qy",
+    "target.qz",
+    "target.qw",
+    "target.gripper.closed_0_1",
+]
+
+DELTA_EEF_ACTION_NAMES = [
     "delta_x",
     "delta_y",
     "delta_z",
@@ -73,6 +111,170 @@ MODEL_ACTION_NAMES = [
     "rotvec_z",
     "gripper_0_1",
 ]
+
+ABSOLUTE_EEF_ACTION_NAMES = [
+    "eef_target.x_m_base",
+    "eef_target.y_m_base",
+    "eef_target.z_m_base",
+    "eef_target.axis_angle_x_rad_base",
+    "eef_target.axis_angle_y_rad_base",
+    "eef_target.axis_angle_z_rad_base",
+    "gripper.closed_target_0_1",
+]
+
+# Backwards-compatible public name for the historical/default label schema.
+MODEL_ACTION_NAMES = DELTA_EEF_ACTION_NAMES
+
+
+def action_label_spec(action_label_mode: str) -> dict[str, Any]:
+    """Return the exact auditable model-label contract for one supported mode."""
+
+    if action_label_mode == ACTION_LABEL_MODE_DELTA_EEF:
+        return {
+            "mode": ACTION_LABEL_MODE_DELTA_EEF,
+            "type": "anchor_relative_eef",
+            "dim": MODEL_ACTION_DIM,
+            "names": DELTA_EEF_ACTION_NAMES.copy(),
+            "temporal_reference": "observation_anchor_t",
+            "target_offsets": {
+                "start": 1,
+                "end": NATIVE30_CHUNK_SIZE,
+                "unit": "camera_interval",
+                "inclusive": True,
+            },
+            "translation": {
+                "representation": "target_minus_anchor",
+                "formula": "p_target - p_anchor",
+                "frame": "robot_base",
+                "unit": "m",
+            },
+            "rotation": {
+                "representation": "principal_rotation_vector",
+                "formula": "Log(R_anchor.T @ R_target)",
+                "frame": "anchor_eef_body",
+                "unit": "rad",
+            },
+            "gripper": {
+                "representation": "absolute_target",
+                "encoding": "closed_0_1",
+                "zero": "open",
+                "one": "closed",
+                "range": [0.0, 1.0],
+            },
+        }
+    if action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+        return {
+            "mode": ACTION_LABEL_MODE_ABSOLUTE_EEF,
+            "type": "absolute_eef",
+            "dim": MODEL_ACTION_DIM,
+            "names": ABSOLUTE_EEF_ACTION_NAMES.copy(),
+            "temporal_reference": "robot_base",
+            "target_offsets": {
+                "start": 1,
+                "end": NATIVE30_CHUNK_SIZE,
+                "unit": "camera_interval",
+                "inclusive": True,
+            },
+            "translation": {
+                "representation": "absolute_target",
+                "formula": "p_target",
+                "frame": "robot_base",
+                "unit": "m",
+            },
+            "rotation": {
+                "representation": "principal_rotation_vector",
+                "formula": "Log(R_target)",
+                "frame": "robot_base",
+                "unit": "rad",
+            },
+            "gripper": {
+                "representation": "absolute_target",
+                "encoding": "closed_0_1",
+                "zero": "open",
+                "one": "closed",
+                "range": [0.0, 1.0],
+            },
+        }
+    raise ValueError(
+        f"unsupported action_label_mode {action_label_mode!r}; "
+        f"expected one of {SUPPORTED_ACTION_LABEL_MODES}"
+    )
+
+
+def resolve_data_config_action_label_spec(
+    config: Mapping[str, Any], *, source: Path | str
+) -> dict[str, Any]:
+    """Resolve action labels from one immutable native30 data config.
+
+    Older delta configs predate ``contract.action_label_mode``. They remain
+    valid only when their exact ``contract.action_layout`` identifies the
+    historical delta schema. New configs may declare the mode explicitly, but
+    the declaration and layout must agree exactly.
+    """
+
+    contract = config.get("contract")
+    if not isinstance(contract, Mapping):
+        raise ValueError(f"contract must be a mapping in {source}")
+    layout = contract.get("action_layout")
+    matches = [
+        mode
+        for mode in SUPPORTED_ACTION_LABEL_MODES
+        if layout == action_label_spec(mode)["names"]
+    ]
+    if len(matches) != 1:
+        expected = {
+            mode: action_label_spec(mode)["names"]
+            for mode in SUPPORTED_ACTION_LABEL_MODES
+        }
+        raise ValueError(
+            f"contract.action_layout does not identify one supported action mode in "
+            f"{source}: actual={layout!r}, expected={expected!r}"
+        )
+    inferred_mode = matches[0]
+    declared_mode = contract.get("action_label_mode")
+    if declared_mode is None:
+        return action_label_spec(inferred_mode)
+    if not isinstance(declared_mode, str):
+        raise ValueError(
+            f"contract.action_label_mode must be a string in {source}, got "
+            f"{declared_mode!r}"
+        )
+    declared = action_label_spec(declared_mode)
+    if declared_mode != inferred_mode:
+        raise ValueError(
+            "contract.action_label_mode/action_layout mismatch in "
+            f"{source}: declared={declared_mode!r}, inferred={inferred_mode!r}"
+        )
+    return declared
+
+
+def resolve_action_label_spec(
+    payload: Mapping[str, Any], *, source: Path | str
+) -> dict[str, Any]:
+    """Resolve and validate a profile/stats action-label contract.
+
+    Metadata written before the selectable-label feature had no explicit mode;
+    that legacy shape is interpreted as the historical ``delta_eef`` behavior.
+    Once ``action_label_mode`` is present, the complete descriptor is mandatory
+    and exact so a malformed absolute dataset cannot silently become relative.
+    """
+
+    mode = payload.get("action_label_mode")
+    if mode is None:
+        if "action_label" in payload:
+            raise ValueError(
+                f"action_label requires action_label_mode in {source}"
+            )
+        return action_label_spec(DEFAULT_ACTION_LABEL_MODE)
+    if not isinstance(mode, str):
+        raise ValueError(f"action_label_mode must be a string in {source}")
+    expected = action_label_spec(mode)
+    actual = payload.get("action_label")
+    if actual != expected:
+        raise ValueError(
+            f"action_label contract mismatch in {source}: expected={expected}, actual={actual}"
+        )
+    return expected
 
 
 class UnsupportedActionRateError(NotImplementedError):
@@ -190,6 +392,7 @@ def load_cartesian_profile(dataset_root: str | Path) -> dict[str, Any]:
         raise ValueError(f"profile main_action_key must be {ACTION_KEY!r}: {path}")
     if payload.get("requires_project_cartesian_adapter") is not True:
         raise ValueError(f"profile must require the project Cartesian adapter: {path}")
+    resolve_action_label_spec(payload, source=path)
     return payload
 
 
@@ -230,6 +433,16 @@ def _validate_on_disk_schema(
         elif shape != expected_shape:
             raise ValueError(
                 f"on-disk feature {key!r} must have shape {expected_shape}, got {shape}: {path}"
+            )
+    expected_names = {
+        STATE_KEY: STATE_NAMES,
+        ACTION_KEY: ABSOLUTE_CARRIER_NAMES,
+    }
+    for key, names in expected_names.items():
+        actual_names = features[key].get("names")
+        if actual_names != names:
+            raise ValueError(
+                f"on-disk feature {key!r} names must be {names}, got {actual_names}: {path}"
             )
     return info
 
@@ -402,6 +615,8 @@ def load_valid_action15_anchors(dataset_root: str | Path) -> tuple[AnchorRecord,
 def load_train_monitor_indices(
     monitor_path: str | Path,
     valid_anchors: Sequence[AnchorRecord],
+    *,
+    expected_action_label: Mapping[str, Any] | None = None,
 ) -> tuple[int, ...]:
     """Resolve the frozen monitor subset to compact wrapper indices."""
 
@@ -411,6 +626,9 @@ def load_train_monitor_indices(
         raise ValueError(f"invalid train-monitor metadata: {path}")
     if payload.get("source") != "training_data" or payload.get("held_out") is not False:
         raise ValueError(f"monitor subset must be an in-sample training diagnostic: {path}")
+    monitor_action_label = resolve_action_label_spec(payload, source=path)
+    if expected_action_label is not None and monitor_action_label != dict(expected_action_label):
+        raise ValueError(f"monitor subset action-label contract mismatch: {path}")
     if int(payload.get("population_size", -1)) != len(valid_anchors):
         raise ValueError(f"monitor population_size does not match valid anchors: {path}")
     monitor_rows = payload["anchors"]
@@ -452,11 +670,12 @@ def load_effective_pi0_stats(
     *,
     expected_source_dataset_hash: str | None = None,
     expected_logical_anchor_index_sha256: str | None = None,
+    expected_action_label: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Load only model-visible 10D state and 7D action statistics.
 
     On-disk image statistics and the absolute 8D carrier statistics are never
-    returned. Rate/chunk metadata is checked before any tensor is exposed.
+    returned. Rate/chunk/label metadata is checked before any tensor is exposed.
     """
 
     path = Path(stats_path)
@@ -464,6 +683,9 @@ def load_effective_pi0_stats(
     if not isinstance(payload, dict):
         raise ValueError(f"effective stats must be a JSON object: {path}")
     _require_supported_profile(payload, source=path)
+    stats_action_label = resolve_action_label_spec(payload, source=path)
+    if expected_action_label is not None and stats_action_label != dict(expected_action_label):
+        raise ValueError(f"effective stats action-label contract mismatch: {path}")
     if (
         expected_source_dataset_hash is not None
         and payload.get("source_dataset_hash") != expected_source_dataset_hash
@@ -503,6 +725,12 @@ def load_effective_pi0_stats(
         if torch.any(tensor_stats["std"] < 0):
             raise ValueError(f"{feature_key}.std must be non-negative: {path}")
         result[feature_key] = tensor_stats
+    expected_action_count = result[STATE_KEY]["count"].item() * int(payload["chunk_size"])
+    if result[ACTION_KEY]["count"].item() != expected_action_count:
+        raise ValueError(
+            f"action.count must equal observation.state.count * chunk_size "
+            f"({expected_action_count}): {path}"
+        )
     return result
 
 
@@ -536,6 +764,30 @@ def absolute_carrier_to_relative_action(
         carrier_numpy[:, 7],
     )
     return torch.as_tensor(relative, dtype=torch.float32, device=carrier_tensor.device)
+
+
+def absolute_carrier_to_absolute_action(
+    absolute_carrier: Any,
+) -> torch.Tensor:
+    """Convert a ``[50,8]`` quaternion carrier to absolute ``[50,7]`` labels."""
+
+    carrier_tensor = torch.as_tensor(absolute_carrier, dtype=torch.float32)
+    if tuple(carrier_tensor.shape) != (ACTION15_CHUNK_SIZE, ABSOLUTE_CARRIER_DIM):
+        raise ValueError(
+            f"absolute action carrier must have shape "
+            f"({ACTION15_CHUNK_SIZE},{ABSOLUTE_CARRIER_DIM}), got {tuple(carrier_tensor.shape)}"
+        )
+    if not torch.isfinite(carrier_tensor).all():
+        raise ValueError("absolute action carrier must be finite")
+
+    carrier_numpy = carrier_tensor.detach().cpu().numpy().astype(np.float64, copy=False)
+    target_rotation = quaternion_xyzw_to_matrix(carrier_numpy[:, 3:7])
+    absolute = encode_absolute_action(
+        carrier_numpy[:, :3],
+        target_rotation,
+        carrier_numpy[:, 7],
+    )
+    return torch.as_tensor(absolute, dtype=torch.float32, device=carrier_tensor.device)
 
 
 class CartesianDatasetMetadata:
@@ -620,12 +872,17 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
         observation_fps, action_fps, chunk_size = _require_supported_profile(
             profile_metadata, source=dataset_root / "meta/franka_eef_profile.json"
         )
+        resolved_action_label = resolve_action_label_spec(
+            profile_metadata, source=dataset_root / "meta/franka_eef_profile.json"
+        )
         _validate_on_disk_schema(
             dataset_root, expected_observation_fps=observation_fps
         )
         all_anchors = load_valid_cartesian_anchors(dataset_root)
         all_monitor_logical_indices = load_train_monitor_indices(
-            dataset_root / "meta/train_monitor_subset.json", all_anchors
+            dataset_root / "meta/train_monitor_subset.json",
+            all_anchors,
+            expected_action_label=resolved_action_label,
         )
         effective_stats = load_effective_pi0_stats(
             dataset_root / "meta/pi0_eef_stats.json",
@@ -633,6 +890,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
             expected_logical_anchor_index_sha256=profile_metadata.get(
                 "logical_anchor_index_sha256"
             ),
+            expected_action_label=resolved_action_label,
         )
 
         selected_episode_indices = self._validate_episode_selection(
@@ -691,6 +949,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
             action_fps=int(profile_metadata["action_fps"]),
             chunk_size=int(profile_metadata["chunk_size"]),
             task_instruction=profile_metadata.get("task_instruction"),
+            action_label_mode=str(resolved_action_label["mode"]),
         )
 
     @staticmethod
@@ -770,6 +1029,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
         action_fps: int = ACTION15_ACTION_FPS,
         chunk_size: int = ACTION15_CHUNK_SIZE,
         task_instruction: str | None = None,
+        action_label_mode: str = DEFAULT_ACTION_LABEL_MODE,
     ) -> "CartesianAnchorDataset":
         """Construct from an already-windowed base dataset (primarily for tests)."""
 
@@ -785,6 +1045,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
             action_fps=action_fps,
             chunk_size=chunk_size,
             task_instruction=task_instruction,
+            action_label_mode=action_label_mode,
         )
         return instance
 
@@ -801,6 +1062,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
         action_fps: int,
         chunk_size: int,
         task_instruction: str | None,
+        action_label_mode: str,
     ) -> None:
         _require_supported_profile(
             {
@@ -879,6 +1141,8 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
         self.observation_fps = observation_fps
         self.action_fps = action_fps
         self.chunk_size = chunk_size
+        self.action_label = action_label_spec(action_label_mode)
+        self.action_label_mode = str(self.action_label["mode"])
         if task_instruction is not None and (
             not isinstance(task_instruction, str) or not task_instruction.strip()
         ):
@@ -941,7 +1205,7 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
         if tuple(features[STATE_KEY].get("shape", ())) != (STATE_DIM,):
             raise ValueError("base state feature must be 10D")
         features[ACTION_KEY]["shape"] = (MODEL_ACTION_DIM,)
-        features[ACTION_KEY]["names"] = MODEL_ACTION_NAMES.copy()
+        features[ACTION_KEY]["names"] = list(self.action_label["names"])
         return features
 
     @property
@@ -1012,9 +1276,14 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
             )
 
         state = torch.as_tensor(item[STATE_KEY], dtype=torch.float32)
-        relative_action = absolute_carrier_to_relative_action(state, item[ACTION_KEY])
+        if self.action_label_mode == ACTION_LABEL_MODE_DELTA_EEF:
+            model_action = absolute_carrier_to_relative_action(state, item[ACTION_KEY])
+        elif self.action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+            model_action = absolute_carrier_to_absolute_action(item[ACTION_KEY])
+        else:  # pragma: no cover - action_label_spec rejects this during construction.
+            raise AssertionError(f"unreachable action label mode: {self.action_label_mode}")
         item[STATE_KEY] = state
-        item[ACTION_KEY] = relative_action
+        item[ACTION_KEY] = model_action
         item[ACTION_PAD_KEY] = pad_mask
         if self.task_instruction is not None and item.get("task") != self.task_instruction:
             raise RuntimeError(
@@ -1032,6 +1301,10 @@ class CartesianAnchorDataset(Dataset[dict[str, Any]]):
 
 
 __all__ = [
+    "ABSOLUTE_CARRIER_NAMES",
+    "ABSOLUTE_EEF_ACTION_NAMES",
+    "ACTION_LABEL_MODE_ABSOLUTE_EEF",
+    "ACTION_LABEL_MODE_DELTA_EEF",
     "ACTION15_ACTION_FPS",
     "ACTION15_CHUNK_SIZE",
     "ACTION15_OBSERVATION_FPS",
@@ -1046,11 +1319,17 @@ __all__ = [
     "CartesianAnchorDataset",
     "CartesianDatasetMetadata",
     "DEFAULT_CAMERA_KEY_MAP",
+    "DEFAULT_ACTION_LABEL_MODE",
+    "DELTA_EEF_ACTION_NAMES",
     "MODEL_ACTION_DIM",
+    "MODEL_ACTION_NAMES",
+    "STATE_NAMES",
     "STATE_DIM",
     "STATE_KEY",
     "UnsupportedActionRateError",
+    "absolute_carrier_to_absolute_action",
     "absolute_carrier_to_relative_action",
+    "action_label_spec",
     "action_delta_timestamps",
     "action15_delta_timestamps",
     "load_cartesian_profile",
@@ -1059,4 +1338,5 @@ __all__ = [
     "load_train_monitor_indices",
     "load_valid_cartesian_anchors",
     "load_valid_action15_anchors",
+    "resolve_action_label_spec",
 ]
