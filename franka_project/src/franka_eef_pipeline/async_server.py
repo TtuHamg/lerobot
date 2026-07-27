@@ -51,6 +51,7 @@ from lerobot.async_inference.policy_server import PolicyServer
 from lerobot.transport import services_pb2
 from lerobot.utils.constants import OBS_STATE
 
+from .dual_rate_dataset import resolve_action_label_spec
 from .geometry import (
     decode_relative_action,
     enforce_quaternion_continuity,
@@ -128,6 +129,21 @@ _MISSING = object()
 
 class FrankaAsyncPolicyContractError(RuntimeError):
     """Raised when remote inference would violate the frozen Franka contract."""
+
+
+def _resolve_checkpoint_action_label(
+    payload: dict[str, Any],
+    *,
+    name: str,
+) -> dict[str, Any]:
+    """Resolve legacy/new action-label metadata as a serving contract error."""
+
+    try:
+        return resolve_action_label_spec(payload, source=name)
+    except (TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError(
+            f"Invalid Franka action-label contract in {name}: {exc}"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -477,6 +493,34 @@ def _validate_geometry_and_stats_manifests(
     if not isinstance(profile, dict):
         raise FrankaAsyncPolicyContractError("Franka geometry manifest has no dataset_profile object")
 
+    # Missing fields are the legacy delta checkpoint contract. Once any new
+    # metadata is present, the complete shared spec is mandatory. Compare the
+    # full formula/frame/name contract rather than trusting a matching mode.
+    action7_label_payload: dict[str, Any] = {}
+    if "action_label_mode" in action7:
+        action7_label_payload["action_label_mode"] = action7["action_label_mode"]
+    if "contract" in action7:
+        action7_label_payload["action_label"] = action7["contract"]
+    action7_label = _resolve_checkpoint_action_label(
+        action7_label_payload,
+        name="geometry.action7",
+    )
+    profile_action_label = _resolve_checkpoint_action_label(
+        profile,
+        name="geometry.dataset_profile",
+    )
+    if action7_label != profile_action_label:
+        raise FrankaAsyncPolicyContractError(
+            "Franka action-label contract mismatch between action7 and dataset_profile"
+        )
+    action_label_mode = str(action7_label["mode"])
+    if action_label_mode != "delta_eef":
+        raise FrankaAsyncPolicyContractError(
+            "Franka async PI0 serving currently supports only delta_eef checkpoints; "
+            f"got action_label_mode={action_label_mode!r}. Absolute-EEF deployment "
+            "requires an explicit absolute7-to-absolute8 decoder."
+        )
+
     action_semantics = {name: action7.get(name) for name in _ACTION_SEMANTICS}
     if action_semantics != _ACTION_SEMANTICS:
         raise FrankaAsyncPolicyContractError(
@@ -537,6 +581,11 @@ def _validate_geometry_and_stats_manifests(
     if actual_stats != expected_stats:
         raise FrankaAsyncPolicyContractError(
             f"Franka stats manifest contract mismatch: expected={expected_stats}, actual={actual_stats}"
+        )
+    stats_action_label = _resolve_checkpoint_action_label(stats, name="stats")
+    if stats_action_label != profile_action_label:
+        raise FrankaAsyncPolicyContractError(
+            "Franka action-label contract mismatch between stats and geometry/profile"
         )
     _, stats_rollout_declared = _rollout_authorization(stats, name="stats")
     if geometry_rollout_declared != stats_rollout_declared:

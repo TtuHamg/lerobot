@@ -334,6 +334,45 @@ def encode_relative_action(
     return np.concatenate((delta_position, delta_rotation, gripper), axis=-1)
 
 
+def encode_absolute_action(
+    target_position: ArrayLike,
+    target_rotation: ArrayLike,
+    target_gripper: ArrayLike,
+) -> FloatArray:
+    """Encode an absolute EEF target as ``[p_base, Log(R_base_to_eef), gripper]``.
+
+    The rotation vector is the principal SO(3) logarithm of the absolute target
+    rotation.  Unlike :func:`encode_relative_action`, no observation anchor is
+    used by this representation.
+    """
+
+    position = _finite_array(target_position, name="target_position")
+    rotation = _validate_rotation_matrix(target_rotation, atol=2e-6)
+    _require_last_shape(position, (3,), name="target_position")
+    if rotation.shape[:-2] != position.shape[:-1]:
+        raise ValueError("target_position and target_rotation leading shapes differ")
+
+    gripper = _finite_array(target_gripper, name="target_gripper")
+    if gripper.shape == position.shape[:-1]:
+        gripper = gripper[..., None]
+    if gripper.shape != position.shape[:-1] + (1,):
+        raise ValueError(
+            "target_gripper must have target leading shape with optional final singleton, "
+            f"got {gripper.shape} for target {position.shape}"
+        )
+    return np.concatenate((position, so3_log(rotation), gripper), axis=-1)
+
+
+def decode_absolute_action(
+    action: ArrayLike,
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Decode a 7D absolute EEF action into position, rotation and gripper."""
+
+    value = _finite_array(action, name="action")
+    _require_last_shape(value, (7,), name="action")
+    return value[..., :3].copy(), so3_exp(value[..., 3:6]), value[..., 6:7].copy()
+
+
 def decode_relative_action(
     anchor_position: ArrayLike,
     anchor_rotation: ArrayLike,

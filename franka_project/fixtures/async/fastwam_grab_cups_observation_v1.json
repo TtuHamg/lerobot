@@ -1,0 +1,211 @@
+{
+  "arrays": {
+    "camera1": {
+      "dtype": "uint8",
+      "shape": [
+        480,
+        640,
+        3
+      ]
+    },
+    "camera2": {
+      "dtype": "uint8",
+      "shape": [
+        480,
+        640,
+        3
+      ]
+    },
+    "state": {
+      "dtype": "float32",
+      "shape": [
+        10
+      ]
+    }
+  },
+  "fixture": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/fixtures/async/fastwam_grab_cups_observation_v1.npz",
+  "fixture_kind": "fastwam_training_aligned_raw_observation",
+  "fixture_sha256": "de3fe887a3495c6119f3b631969b30c4b5506bd439142e435427ed159124f96d",
+  "policy_type": "fastwam",
+  "preprocessing_parity": {
+    "combined_preencode_sha256": "2b60d662b50b696f46634fdd435efda577e7d98e21f881a91734b47cb9a8ee8d",
+    "combined_preencode_shape": [
+      224,
+      448,
+      3
+    ],
+    "combined_preencode_vs_training_h264_decode": {
+      "max_absolute_error_uint8": 33,
+      "mean_absolute_error_uint8": 2.0592580782312924,
+      "mse_uint8": 8.158854166666666,
+      "psnr_db": 39.01451190353736
+    },
+    "combined_training_h264_sha256": "b0017633aa35d822c53fd551701601436a8be04462b429ca9d36081ed3d98fce",
+    "combined_training_h264_shape": [
+      224,
+      448,
+      3
+    ],
+    "deployment_equals_conversion_preencode": true,
+    "image_preprocess": "raw 480x640 center-crop square, bilinear resize to 224x224",
+    "images": {
+      "camera1": {
+        "preencode_center_crop_sha256": "da442b63c8fdb9bf216ff533b1de3b5ed687f289ff869cd1272b50e690296d99",
+        "preencode_vs_training_h264_decode": {
+          "max_absolute_error_uint8": 33,
+          "mean_absolute_error_uint8": 2.4909983524659864,
+          "mse_uint8": 11.475120907738095,
+          "psnr_db": 37.533230906859025
+        },
+        "raw_mcap_index": 107,
+        "raw_wire_sha256": "57bf00711d9c32567371aa26e5cd561d08dab4bdd9bca26e60f1382abc517849",
+        "training_h264_frame_sha256": "4196dfac65d60f52be3dfcec13c1a125cf6f42b3c3b8a3d857037ba83fd2f0c6",
+        "training_h264_path": "/m2v_intern/tujiahang/Projects/FastWAM/franka_project/data/lerobot/franka_eef_grab_cups_v2/videos/chunk-000/observation.images.camera1/episode_000004.mp4",
+        "training_h264_sha256": "dfb25e97da3b1ab00f6892f32e8b9fc936cc569ee3a8795ad7fcca758babf104"
+      },
+      "camera2": {
+        "preencode_center_crop_sha256": "ec389752bd0d5f394e998bd6bf495f79c59b66b3a6912d668125dfcc88412791",
+        "preencode_vs_training_h264_decode": {
+          "max_absolute_error_uint8": 25,
+          "mean_absolute_error_uint8": 1.6275178039965987,
+          "mse_uint8": 4.842587425595238,
+          "psnr_db": 41.28002890875656
+        },
+        "raw_mcap_index": 107,
+        "raw_wire_sha256": "97d22c54f9bbecd286f984c8d51b03c2904ad53ceba6ccded9c3ffcae4f5b677",
+        "training_h264_frame_sha256": "4f293c326dbbc6353dfaffbfa952d20e71bf1d49bfb5a796b79d51c193911629",
+        "training_h264_path": "/m2v_intern/tujiahang/Projects/FastWAM/franka_project/data/lerobot/franka_eef_grab_cups_v2/videos/chunk-000/observation.images.camera2/episode_000004.mp4",
+        "training_h264_sha256": "e001a3534a3f6477ebb5a5f0bb9ebffac7855626bd5a8d5c0aa9169a75958966"
+      }
+    },
+    "note": "NPZ images are exact raw MCAP RGB messages because the async wire contract requires 480x640. Training consumes their 224x224 center-cropped H.264 encodes; the reported pixel residual is the expected video-codec difference after identical geometry.",
+    "raw_state_to_stored_training_state8_max_abs_error": 1.1499614505083855e-07,
+    "state_tolerance": 2e-06,
+    "wire_state10_to_stored_training_state8_max_abs_error": 1.2870187715563475e-07
+  },
+  "schema_version": 1,
+  "source": {
+    "alignment_age_ns": {
+      "camera1": 0,
+      "camera2": 1349313,
+      "eef": 32956014,
+      "gripper": 1238948
+    },
+    "alignment_strategy": "latest_not_after",
+    "artifact_sha256": {
+      "alignment_report": "218799e0101075c6798e988c6f9f8f12989f5ae15df69eeddb40031f384a3f66",
+      "alignment_sidecar": "b8668d852d5687d6af6771d196c962b61e3c9ed8c9435673fb37c3f27504d45d",
+      "dataset_contract": "d7a5debcc36fe28e20d3b084feab49cbb645fd48d7b9c4f9d5b2b8e51f11a17d",
+      "episode_parquet": "9f039f38d63d6666488f988884ed303eb46ac0b11e31337a10438f62c26db0a2",
+      "episodes": "cadcd8a20c80a1fec1ae558c4c8e56364864c60bf3747a4b08faf9b550913736",
+      "info": "b3b27bbb568255ccd19d21acbfea0786bb5b96c5647276d48b0b9b90aa7475cf",
+      "resolved_dataset_profile": "79dc1f025bd0db4c88cb931648829751aef873b83402a20363f4529b4d8520d7",
+      "source_to_segments": "c405d36799e5b339ce039fecf65ebbf79e3bca9bac41c56c6b11febbf98d9671",
+      "tasks": "de5c39925935552804cd94018be8242f7770e3b5a3ef4db98c15a83dc74537b7"
+    },
+    "dataset_name": "franka_eef_grab_cups_v2",
+    "dataset_root": "/m2v_intern/tujiahang/Projects/FastWAM/franka_project/data/lerobot/franka_eef_grab_cups_v2",
+    "fastwam_root": "/m2v_intern/tujiahang/Projects/FastWAM",
+    "mcap_path": "/ytech_milm/collect_data_103/frank3/20260725_100/0725/run_20260725_124233_00108/run_20260725_124233_00108_0.mcap",
+    "mcap_size_bytes": 341578587,
+    "output_episode_index": 4,
+    "output_frame_index": 106,
+    "output_global_index": 935,
+    "raw_indices": {
+      "camera1": 107,
+      "camera2": 107,
+      "eef": 106,
+      "gripper": 1793
+    },
+    "reference_time_ns": 1784954561003512852,
+    "repo_id": "local/franka_eef_grab_cup_v2",
+    "source_alignment_row": 106,
+    "source_episode_id": "run_20260725_124233_00108",
+    "source_episode_status": "PASS",
+    "source_local_segment_index": 0,
+    "task": "grab the paper cup.",
+    "timestamp_source": "log_time"
+  },
+  "training_window_evidence": {
+    "action_window_sha256": "422d5c63d8ee683f6cd317e70d4ac811011a83b11c13482accc0fccee827338e",
+    "actions_exported_to_fixture": false,
+    "anchor_eef_z_m": 0.2034136801958084,
+    "anchor_gripper_open_0_1": 0.8821129202842712,
+    "anchor_state8": [
+      0.38589417934417725,
+      -0.11898356676101685,
+      0.2034136801958084,
+      -2.7850475311279297,
+      -1.1757081747055054,
+      0.6431645750999451,
+      0.03528451547026634,
+      -0.03528451547026634
+    ],
+    "eef_z_delta_m": 0.07494331896305084,
+    "first_action_step_open_target_at_or_below_0_2_1_based": 12,
+    "minimum_future_gripper_open_target_0_1": 0.01760737970471382,
+    "num_action_steps": 32,
+    "num_observation_frames": 33,
+    "state_window_sha256": "fe0f8cb495d7e7ad4914471647d94fc78d97822d0a8509920cdc9daaae93351d",
+    "terminal_eef_z_m": 0.27835699915885925,
+    "terminal_state8": [
+      0.37451452016830444,
+      -0.12499874830245972,
+      0.27835699915885925,
+      -2.523277521133423,
+      -1.2761186361312866,
+      0.8480675220489502,
+      0.0007042951765470207,
+      -0.0007042951765470207
+    ],
+    "video_frame_offsets": [
+      0,
+      4,
+      8,
+      12,
+      16,
+      20,
+      24,
+      28,
+      32
+    ],
+    "video_output_frame_indices": [
+      106,
+      110,
+      114,
+      118,
+      122,
+      126,
+      130,
+      134,
+      138
+    ]
+  },
+  "wire_contract": {
+    "actions_per_chunk": 32,
+    "camera_dtype": "uint8",
+    "camera_order": [
+      "camera1",
+      "camera2"
+    ],
+    "camera_shape": [
+      480,
+      640,
+      3
+    ],
+    "fps": 30,
+    "rename_map": {},
+    "state_names": [
+      "eef.x",
+      "eef.y",
+      "eef.z",
+      "eef.rot6d.col0.x",
+      "eef.rot6d.col0.y",
+      "eef.rot6d.col0.z",
+      "eef.rot6d.col1.x",
+      "eef.rot6d.col1.y",
+      "eef.rot6d.col1.z",
+      "gripper.closed_0_1"
+    ]
+  }
+}

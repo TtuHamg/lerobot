@@ -1,0 +1,76 @@
+schema_version: 2
+job_name: pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2_absolute_eef
+
+dataset:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/data/lerobot/franka_grab_cups_obs30_act30_k50_v2_57edb912_absolute_eef
+  profile: native30
+  observation_fps: 30
+  action_fps: 30
+  chunk_size: 50
+  action_label_mode: absolute_eef
+  task_instruction: grab the paper cup.
+  episode_indices: null
+  max_anchors_per_episode: null
+  # expected_valid_anchors: 
+  expected_scope_content_sha256: 57edb912f5fdaf315203507fa07f61b7f51f767b99e4443b2cfe0b70a25a9e24
+
+model:
+  pretrained_path: /ytech_milm_intern/tujiahang/.cache/huggingface/hub/models--lerobot--pi0_base/snapshots/25c379b52ba2ff8788cab921758a3cc3fe3f77f2
+  strict: true
+  dtype: bfloat16
+  gradient_checkpointing: true
+  compile_model: false
+  max_state_dim: 32
+  max_action_dim: 32
+  use_relative_actions: false
+  peft: null
+  # Available presets:
+  #   full: train all six PI0 components.
+  #   action_expert: train the action expert and state/action/time projections.
+  #   action_expert_paligemma: additionally train the PaliGemma transformer and
+  #     multimodal projector, while freezing the vision tower and text embedding.
+  #   custom: choose an explicit subset in components from:
+  #     [vision_encoder, multimodal_projector, text_embedding,
+  #      paligemma_transformer, action_expert, action_projections]
+  trainability:
+    preset: action_expert_paligemma
+    components: null
+
+training:
+  seed: 1000
+  epochs: 50
+  steps: auto
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 1
+  num_workers: 4
+  shuffle: true
+  peak_lr: 1.0e-5
+  final_lr: 1.0e-6
+  warmup_fraction: 0.05
+  warmup_max_steps: 1000
+  weight_decay: 0.01
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+  mixed_precision: bf16
+  log_freq: 50
+  monitor_freq_epochs: 1
+  monitor_max_samples: 1024
+  save_freq_epochs: 10
+  save_optimizer_state: true
+  require_gradient_coverage: true
+  gpu_count: 8
+
+output:
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2_absolute_eef
+  immutable_run_directory: true
+  save_to_hub: false
+
+wandb:
+  enable: true
+  mode: online
+  entity: ttuhamg
+  project: franka_pi0_ActTrans_eef
+  disable_artifact: true
+  save_code: false
+  tags: [franka, pi0, action_expert_paligemma, freeze_vision, freeze_text_embedding, eef, absolute_eef, grab_cups_v2, obs30_act30, k50]

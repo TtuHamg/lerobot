@@ -49,7 +49,10 @@ if str(PROJECT_SRC) not in sys.path:
 # separate config parser, gradient gate, save path, and training function.
 import train_pi0_full as shared  # noqa: E402
 from franka_eef_pipeline import pi0_training as pi0_io  # noqa: E402
-from franka_eef_pipeline.dual_rate_dataset import CartesianAnchorDataset  # noqa: E402
+from franka_eef_pipeline.dual_rate_dataset import (  # noqa: E402
+    CartesianAnchorDataset,
+    action_label_spec,
+)
 from franka_eef_pipeline.pi0_trainability import (  # noqa: E402
     PI0TrainabilityError,
     apply_pi0_trainability,
@@ -114,6 +117,7 @@ def load_and_validate_config(path: str | Path) -> tuple[dict[str, Any], Path, st
         "observation_fps",
         "action_fps",
         "chunk_size",
+        "action_label_mode",
         "episode_indices",
         "max_anchors_per_episode",
         "expected_valid_anchors",
@@ -137,6 +141,13 @@ def load_and_validate_config(path: str | Path) -> tuple[dict[str, Any], Path, st
             raise TrainingContractError(f"dataset.{key} must be a non-empty string")
     for key in ("observation_fps", "action_fps", "chunk_size"):
         shared._positive_int(dataset[key], f"dataset.{key}")
+    dataset.setdefault("action_label_mode", "delta_eef")
+    try:
+        action_label_spec(dataset["action_label_mode"])
+    except (TypeError, ValueError) as exc:
+        raise TrainingContractError(
+            f"dataset.action_label_mode is invalid: {dataset['action_label_mode']!r}"
+        ) from exc
     scope_hash = dataset["expected_scope_content_sha256"]
     if (
         not isinstance(scope_hash, str)

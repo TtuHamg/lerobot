@@ -5,8 +5,9 @@ This entry point is intentionally separate from ``convert_to_lerobot.py``.  The
 older converter implements a frozen 15 Hz observation / dual-rate experiment;
 this converter uses every cam1 frame from a native 30 Hz recording and one EEF
 endpoint target per camera interval.  The on-disk action is an auditable 8D
-absolute carrier.  ``CartesianAnchorDataset(profile="native30")`` converts each
-complete 50-row window into the model-visible anchor-relative 7D action.
+absolute carrier. The selected data config declares whether
+``CartesianAnchorDataset(profile="native30")`` exposes each complete 50-row
+window as anchor-relative delta EEF or absolute EEF; both model labels are 7D.
 """
 
 from __future__ import annotations
@@ -35,7 +36,16 @@ from franka_eef_pipeline.action_chunk import (  # noqa: E402
     GripperMapping,
     align_episode_to_camera,
     build_dual_rate_carriers,
+    model_absolute_action_chunks,
     model_relative_action_chunks,
+)
+from franka_eef_pipeline.dual_rate_dataset import (  # noqa: E402
+    ABSOLUTE_CARRIER_NAMES,
+    ACTION_LABEL_MODE_ABSOLUTE_EEF,
+    ACTION_LABEL_MODE_DELTA_EEF,
+    STATE_NAMES,
+    action_label_spec,
+    resolve_data_config_action_label_spec,
 )
 from franka_eef_pipeline.mcap_reader import (  # noqa: E402
     load_episode_signals,
@@ -53,28 +63,7 @@ DEFAULT_CONFIG = PROJECT_ROOT / "configs/data/franka_chips_current_eef_native30_
 NATIVE_PROFILE = "native30"
 NATIVE_FPS = 30
 CHUNK_SIZE = 50
-STATE_NAMES = [
-    "eef.x",
-    "eef.y",
-    "eef.z",
-    "eef.rot6d.col0.x",
-    "eef.rot6d.col0.y",
-    "eef.rot6d.col0.z",
-    "eef.rot6d.col1.x",
-    "eef.rot6d.col1.y",
-    "eef.rot6d.col1.z",
-    "gripper.closed_0_1",
-]
-CARRIER_NAMES = [
-    "target.x",
-    "target.y",
-    "target.z",
-    "target.qx",
-    "target.qy",
-    "target.qz",
-    "target.qw",
-    "target.gripper.closed_0_1",
-]
+CARRIER_NAMES = ABSOLUTE_CARRIER_NAMES
 
 
 def _utc_now() -> str:
@@ -145,7 +134,9 @@ def _dataset_features(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def _validate_contract(config: dict[str, Any]) -> None:
+def _validate_contract(
+    config: dict[str, Any], *, source: Path | str = "native30 data config"
+) -> dict[str, Any]:
     contract = config.get("contract", {})
     actual = (
         contract.get("profile"),
@@ -170,6 +161,7 @@ def _validate_contract(config: dict[str, Any]) -> None:
     task = contract.get("task_instruction")
     if not isinstance(task, str) or not task.strip():
         raise ValueError("task_instruction must be a non-empty string")
+    return resolve_data_config_action_label_spec(config, source=source)
 
 
 def _thresholds(config: dict[str, Any]) -> AlignmentThresholds:
@@ -373,6 +365,12 @@ def _preflight_summary(
             raise RuntimeError(
                 f"manifest {name} rates fall outside [{minimum},{maximum}] Hz at episodes {bad}"
             )
+    action_label = resolve_data_config_action_label_spec(config, source=config_path)
+    action_label_mode = str(action_label["mode"])
+    partial = len(episodes) != int(config["scope"]["expected_episode_count"])
+    dataset_name, repo_id = _effective_dataset_identity(
+        config, partial_episode_count=len(episodes) if partial else None
+    )
     return {
         "status": "PASS_NATIVE30_PREFLIGHT",
         "config": str(config_path),
@@ -393,6 +391,10 @@ def _preflight_summary(
         "observation_fps": NATIVE_FPS,
         "action_fps": NATIVE_FPS,
         "chunk_size": CHUNK_SIZE,
+        "action_label_mode": action_label_mode,
+        "action_label": action_label,
+        "effective_dataset_name": dataset_name,
+        "effective_repo_id": repo_id,
         "total_mcap_bytes": int(sum(path.stat().st_size for path in mcap_paths)),
         "manifest_rate_hz": {
             name: {
@@ -403,6 +405,58 @@ def _preflight_summary(
             for name, values in rates.items()
         },
     }
+
+
+def _effective_dataset_identity(
+    config: dict[str, Any],
+    *,
+    partial_episode_count: int | None,
+) -> tuple[str, str]:
+    """Resolve immutable output names exactly from config plus partial suffix."""
+
+    partial_suffix = (
+        f"_partial{partial_episode_count}" if partial_episode_count is not None else ""
+    )
+    dataset = config["dataset"]
+    return (
+        f"{dataset['name']}{partial_suffix}",
+        f"{dataset['repo_id']}{partial_suffix}",
+    )
+
+
+def _model_action_chunks(
+    carriers: Any,
+    anchors: np.ndarray,
+    *,
+    action_label_mode: str,
+) -> np.ndarray:
+    """Build the exact model-visible K=50 labels declared by the data config."""
+
+    if action_label_mode == ACTION_LABEL_MODE_DELTA_EEF:
+        result = model_relative_action_chunks(
+            carriers,
+            anchors,
+            profile="action15",
+            horizon_camera_intervals=CHUNK_SIZE,
+        )
+    elif action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+        result = model_absolute_action_chunks(
+            carriers,
+            anchors,
+            profile="action15",
+            horizon_camera_intervals=CHUNK_SIZE,
+        )
+    else:
+        action_label_spec(action_label_mode)
+        raise AssertionError("unreachable action label mode")
+    result = np.asarray(result, dtype=np.float32)
+    expected_shape = (len(anchors), CHUNK_SIZE, int(action_label_spec(action_label_mode)["dim"]))
+    if result.shape != expected_shape or not np.all(np.isfinite(result)):
+        raise RuntimeError(
+            f"model-visible {action_label_mode} labels must be finite with shape "
+            f"{expected_shape}, got {result.shape}"
+        )
+    return result
 
 
 def _median_rate_hz(timestamps_ns: np.ndarray, *, episode_id: str, stream: str) -> float:
@@ -597,7 +651,8 @@ def convert(
 ) -> dict[str, Any]:
     config_path = config_path.expanduser().resolve()
     config = _load_yaml(config_path)
-    _validate_contract(config)
+    action_label = _validate_contract(config, source=config_path)
+    action_label_mode = str(action_label["mode"])
     manifest, episodes, mcap_paths = _validate_manifest(
         config, limit_episodes=limit_episodes
     )
@@ -609,10 +664,11 @@ def convert(
         return preflight
 
     partial = len(episodes) != int(config["scope"]["expected_episode_count"])
-    suffix = f"_partial{len(episodes)}" if partial else ""
     dataset_config = config["dataset"]
-    dataset_name = str(dataset_config["name"]) + suffix
-    repo_id = str(dataset_config["repo_id"]) + suffix
+    dataset_name, repo_id = _effective_dataset_identity(
+        config,
+        partial_episode_count=len(episodes) if partial else None,
+    )
     base = (output_base or Path(dataset_config["output_base"])).expanduser().resolve()
     base.mkdir(parents=True, exist_ok=True)
     final_root = base / dataset_name
@@ -697,14 +753,11 @@ def convert(
             anchors=anchors,
             config=config,
         )
-        relative_actions = model_relative_action_chunks(
-            carriers,
-            anchors,
-            profile="action15",
-            horizon_camera_intervals=CHUNK_SIZE,
-        ).astype(np.float32)
+        model_actions = _model_action_chunks(
+            carriers, anchors, action_label_mode=action_label_mode
+        )
         effective_states.append(carriers.observation_state[anchors].astype(np.float32))
-        effective_actions.append(relative_actions)
+        effective_actions.append(model_actions)
         for anchor in anchors.tolist():
             logical_anchors.append(
                 {
@@ -768,6 +821,33 @@ def convert(
     states = np.concatenate(effective_states, axis=0)
     actions = np.concatenate(effective_actions, axis=0)
     logical_anchor_hash = canonical_sha256(logical_anchors)
+    on_disk_action = {
+        "type": "next_absolute_eef_quaternion_carrier",
+        "dim": len(CARRIER_NAMES),
+        "names": CARRIER_NAMES,
+        "temporal_reference": "next_native_camera_endpoint",
+        "translation_frame": "robot_base",
+        "rotation": "quaternion_xyzw",
+        "gripper": {
+            "encoding": "closed_0_1",
+            "zero": "open",
+            "one": "closed",
+            "range": [0.0, 1.0],
+        },
+    }
+    effective_contract_hash = canonical_sha256(
+        {
+            "profile": NATIVE_PROFILE,
+            "observation_fps": NATIVE_FPS,
+            "action_fps": NATIVE_FPS,
+            "chunk_size": CHUNK_SIZE,
+            "action_label_mode": action_label_mode,
+            "action_label": action_label,
+            "on_disk_action": on_disk_action,
+            "source_dataset_hash": source_hash,
+            "logical_anchor_index_sha256": logical_anchor_hash,
+        }
+    )
     provenance = {
         "profile": NATIVE_PROFILE,
         "scope_content_sha256": str(config["scope"]["scope_content_sha256"]),
@@ -775,6 +855,16 @@ def convert(
         "derived_manifest_sha256": _sha256_file(manifest_path),
         "source_dataset_hash": source_hash,
         "logical_anchor_index_sha256": logical_anchor_hash,
+        "action_label_mode": action_label_mode,
+        "action_label": action_label,
+        "on_disk_action": on_disk_action,
+        "effective_dataset_contract_sha256": effective_contract_hash,
+        "configured_action_layout": config["contract"].get("action_layout"),
+        "action_label_mode_source": (
+            "config.contract.action_label_mode"
+            if "action_label_mode" in config["contract"]
+            else "config.contract.action_layout"
+        ),
         "max_camera_interval_ms": float(config["alignment"]["max_camera_interval_ms"]),
         "conversion_config": str(config_path),
         "conversion_config_sha256": _sha256_file(config_path),
@@ -862,6 +952,9 @@ def convert(
             "action_fps": NATIVE_FPS,
             "chunk_size": CHUNK_SIZE,
             "task_instruction": task,
+            "action_label_mode": action_label_mode,
+            "action_label": action_label,
+            "on_disk_action": on_disk_action,
         },
         "provenance": provenance,
     }
@@ -869,7 +962,12 @@ def convert(
     stage_root.rename(final_root)
     print(
         json.dumps(
-            {"status": report["status"], "dataset_root": str(final_root), **report["counts"]},
+            {
+                "status": report["status"],
+                "dataset_root": str(final_root),
+                "action_label_mode": action_label_mode,
+                **report["counts"],
+            },
             indent=2,
             ensure_ascii=False,
         ),
@@ -878,7 +976,7 @@ def convert(
     return report
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
@@ -896,7 +994,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate config/manifest/files/rate metadata without decoding or writing a dataset.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
