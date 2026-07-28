@@ -7,10 +7,10 @@ server cannot infer:
 
 * reproduce the training-time, aspect-ratio-preserving PI0 camera resize;
 * restore the project's unprefixed, full-parameter PI0 checkpoint strictly;
-* decode the model's 7D anchor-relative Cartesian actions into absolute 8D
+* decode checkpoint-declared delta or absolute 7D Cartesian actions into absolute 8D
   ``[xyz, quaternion_xyzw, gripper]`` targets before they leave the server;
 * reconstruct and run a native-EEF FastWAM checkpoint with its frozen image,
-  proprio, normalization, text-context, and adjacent-action contracts.
+  proprio, normalization, text-context, and action-label contracts.
 
 One server process owns exactly one policy backend.  The launcher selects the
 PI0 or FastWAM servicer at startup from ``PolicyServerConfig.policy_type``;
@@ -51,8 +51,13 @@ from lerobot.async_inference.policy_server import PolicyServer
 from lerobot.transport import services_pb2
 from lerobot.utils.constants import OBS_STATE
 
-from .dual_rate_dataset import resolve_action_label_spec
+from .dual_rate_dataset import (
+    ACTION_LABEL_MODE_ABSOLUTE_EEF,
+    ACTION_LABEL_MODE_DELTA_EEF,
+    resolve_action_label_spec,
+)
 from .geometry import (
+    decode_absolute_action,
     decode_relative_action,
     enforce_quaternion_continuity,
     matrix_to_quaternion_xyzw,
@@ -104,6 +109,30 @@ FASTWAM_CONTEXT_WIDTH = 4096
 FASTWAM_FINGER_SCALE = 0.04
 FASTWAM_FINGER_SIGNS = (1.0, -1.0)
 FASTWAM_CHECKPOINT_PATTERN = re.compile(r"^step_(\d+)\.pt$")
+FASTWAM_ACTION_TYPE_BY_LABEL_MODE = {
+    ACTION_LABEL_MODE_DELTA_EEF: "adjacent_delta_eef",
+    ACTION_LABEL_MODE_ABSOLUTE_EEF: "next_absolute_eef",
+}
+FASTWAM_ACTION_NAMES_BY_LABEL_MODE = {
+    ACTION_LABEL_MODE_DELTA_EEF: [
+        "delta_eef.x_m_base",
+        "delta_eef.y_m_base",
+        "delta_eef.z_m_base",
+        "delta_eef.rotvec_x_rad_body",
+        "delta_eef.rotvec_y_rad_body",
+        "delta_eef.rotvec_z_rad_body",
+        "gripper.open_target_0_1",
+    ],
+    ACTION_LABEL_MODE_ABSOLUTE_EEF: [
+        "eef_target.x_m_base",
+        "eef_target.y_m_base",
+        "eef_target.z_m_base",
+        "eef_target.axis_angle_x_rad_base",
+        "eef_target.axis_angle_y_rad_base",
+        "eef_target.axis_angle_z_rad_base",
+        "gripper.open_target_0_1",
+    ],
+}
 FASTWAM_WAN_VAE_RELATIVE_PATH = Path(
     "DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
 )
@@ -119,10 +148,17 @@ _MANIFEST_TRACKED_FILES = (
 )
 
 _STATE_DESCRIPTION = "current measured EEF xyz + rotation6d(first two columns) + gripper_0_1"
-_ACTION_SEMANTICS = {
-    "gripper": "future measured target gripper_0_1",
-    "rotation": "body rotvec Log(R_current.T @ R_target)",
-    "translation": "base-frame target_xyz - current_xyz",
+_ACTION_SEMANTICS_BY_LABEL_MODE = {
+    ACTION_LABEL_MODE_DELTA_EEF: {
+        "gripper": "future measured target gripper_0_1",
+        "rotation": "body rotvec Log(R_current.T @ R_target)",
+        "translation": "base-frame target_xyz - current_xyz",
+    },
+    ACTION_LABEL_MODE_ABSOLUTE_EEF: {
+        "gripper": "future measured absolute target gripper closed_0_1",
+        "rotation": "principal base-frame rotvec Log(R_target)",
+        "translation": "absolute base-frame target_xyz",
+    },
 }
 _MISSING = object()
 
@@ -155,6 +191,7 @@ class FrankaCheckpointContract:
     observation_fps: int
     action_fps: int
     chunk_size: int
+    action_label_mode: str
     real_robot_rollout_authorized: bool
     rollout_authorization_declared: bool
 
@@ -173,6 +210,7 @@ class FrankaFastWAMCheckpointContract:
     observation_fps: int
     action_fps: int
     chunk_size: int
+    action_label_mode: str
     action_video_freq_ratio: int
     num_video_frames: int
     video_fps: float
@@ -450,7 +488,7 @@ def _validate_model_config(model_config: dict[str, Any], *, chunk_size: int) -> 
     if model_config.get("use_relative_actions") is not False:
         raise FrankaAsyncPolicyContractError(
             "Franka model config use_relative_actions must be false because the project adapter "
-            "owns relative7-to-absolute8 decoding"
+            "owns model-action7-to-canonical-absolute8 decoding"
         )
 
     normalization = model_config.get("normalization_mapping")
@@ -514,18 +552,12 @@ def _validate_geometry_and_stats_manifests(
             "Franka action-label contract mismatch between action7 and dataset_profile"
         )
     action_label_mode = str(action7_label["mode"])
-    if action_label_mode != "delta_eef":
-        raise FrankaAsyncPolicyContractError(
-            "Franka async PI0 serving currently supports only delta_eef checkpoints; "
-            f"got action_label_mode={action_label_mode!r}. Absolute-EEF deployment "
-            "requires an explicit absolute7-to-absolute8 decoder."
-        )
-
-    action_semantics = {name: action7.get(name) for name in _ACTION_SEMANTICS}
-    if action_semantics != _ACTION_SEMANTICS:
+    expected_action_semantics = _ACTION_SEMANTICS_BY_LABEL_MODE[action_label_mode]
+    action_semantics = {name: action7.get(name) for name in expected_action_semantics}
+    if action_semantics != expected_action_semantics:
         raise FrankaAsyncPolicyContractError(
             "Franka geometry action7 semantics mismatch: "
-            f"expected={_ACTION_SEMANTICS}, actual={action_semantics}"
+            f"expected={expected_action_semantics}, actual={action_semantics}"
         )
 
     if profile.get("schema_version") != 1:
@@ -650,6 +682,7 @@ def _validate_geometry_and_stats_manifests(
         observation_fps=observation_fps,
         action_fps=action_fps,
         chunk_size=chunk_size,
+        action_label_mode=action_label_mode,
         real_robot_rollout_authorized=False,
         rollout_authorization_declared=geometry_rollout_declared,
     )
@@ -726,6 +759,108 @@ def _derive_fastwam_video_timing(
     )
 
 
+def _resolve_fastwam_action_label_mode(action_contract: Mapping[str, Any]) -> str:
+    """Validate the exact model-visible FastWAM action contract and return its mode."""
+
+    action_type = action_contract.get("type")
+    mode_by_type = {
+        action_type_value: mode for mode, action_type_value in FASTWAM_ACTION_TYPE_BY_LABEL_MODE.items()
+    }
+    action_label_mode = mode_by_type.get(action_type)
+    if action_label_mode is None:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM representation.action.type must be 'adjacent_delta_eef' or "
+            f"'next_absolute_eef', got {action_type!r}"
+        )
+
+    declared_mode = action_contract.get("label_mode", _MISSING)
+    if declared_mode is _MISSING:
+        if action_label_mode != ACTION_LABEL_MODE_DELTA_EEF:
+            raise FrankaAsyncPolicyContractError(
+                "FastWAM absolute action representation must declare label_mode='absolute_eef'"
+            )
+        expected_action_contract = {
+            "dim": FASTWAM_ACTION_DIM,
+            "names": FASTWAM_ACTION_NAMES_BY_LABEL_MODE[ACTION_LABEL_MODE_DELTA_EEF],
+            "type": FASTWAM_ACTION_TYPE_BY_LABEL_MODE[ACTION_LABEL_MODE_DELTA_EEF],
+            "translation": "p[t+1]-p[t] in base frame, meter",
+            "rotation": "Log(R[t].T @ R[t+1]) body rotvec, radian",
+            "gripper": "absolute next target; 0=closed, 1=open",
+            "delta_dimension_mask": [True, True, True, True, True, True, False],
+        }
+    else:
+        if declared_mode != action_label_mode:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM action label_mode/type mismatch: label_mode={declared_mode!r}, type={action_type!r}"
+            )
+        if action_label_mode == ACTION_LABEL_MODE_DELTA_EEF:
+            expected_action_contract = {
+                "label_mode": ACTION_LABEL_MODE_DELTA_EEF,
+                "dim": FASTWAM_ACTION_DIM,
+                "names": FASTWAM_ACTION_NAMES_BY_LABEL_MODE[ACTION_LABEL_MODE_DELTA_EEF],
+                "type": FASTWAM_ACTION_TYPE_BY_LABEL_MODE[ACTION_LABEL_MODE_DELTA_EEF],
+                "time_alignment": "action[t] targets the transition from observation t to t+1",
+                "translation": "p[t+1]-p[t] in base frame, meter",
+                "rotation": "Log(R[t].T @ R[t+1]) body rotvec, radian",
+                "gripper": "absolute target at t+1; 0=closed, 1=open",
+                "delta_dimension_mask": [True, True, True, True, True, True, False],
+                "terminal_carrier": ("pose no-op plus final absolute gripper hold; excluded from training"),
+            }
+        else:
+            expected_action_contract = {
+                "label_mode": ACTION_LABEL_MODE_ABSOLUTE_EEF,
+                "dim": FASTWAM_ACTION_DIM,
+                "names": FASTWAM_ACTION_NAMES_BY_LABEL_MODE[ACTION_LABEL_MODE_ABSOLUTE_EEF],
+                "type": FASTWAM_ACTION_TYPE_BY_LABEL_MODE[ACTION_LABEL_MODE_ABSOLUTE_EEF],
+                "time_alignment": ("action[t] is the absolute EEF and gripper target at observation t+1"),
+                "translation": "p[t+1] in base frame, meter",
+                "rotation": "principal Log(R[t+1]) axis-angle in base frame, radian",
+                "gripper": "absolute target at t+1; 0=closed, 1=open",
+                "delta_dimension_mask": [False, False, False, False, False, False, False],
+                "terminal_carrier": ("repeat final absolute EEF and gripper target; excluded from training"),
+            }
+
+    actual_action_contract = {key: action_contract.get(key) for key in expected_action_contract}
+    if actual_action_contract != expected_action_contract:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM action representation mismatch for "
+            f"{action_label_mode}: expected={expected_action_contract}, "
+            f"actual={actual_action_contract}"
+        )
+    return action_label_mode
+
+
+def _validate_fastwam_stats_action_label(
+    path: Path,
+    *,
+    action_label_mode: str,
+) -> None:
+    """Cross-check normalization-stat semantics against the dataset contract."""
+
+    stats = _read_json_object(path)
+    statistics_contract = _mapping(
+        stats.get("statistics_contract"),
+        name=f"{path}:statistics_contract",
+    )
+    declared_mode = statistics_contract.get("action_label_mode", _MISSING)
+    if declared_mode is _MISSING:
+        if action_label_mode != ACTION_LABEL_MODE_DELTA_EEF:
+            raise FrankaAsyncPolicyContractError(
+                f"{path}:statistics_contract has no absolute action-label metadata"
+            )
+        return
+    expected = {
+        "action_label_mode": action_label_mode,
+        "action_type": FASTWAM_ACTION_TYPE_BY_LABEL_MODE[action_label_mode],
+        "action_names": FASTWAM_ACTION_NAMES_BY_LABEL_MODE[action_label_mode],
+    }
+    actual = {key: statistics_contract.get(key) for key in expected}
+    if actual != expected:
+        raise FrankaAsyncPolicyContractError(
+            f"{path}:statistics_contract action-label mismatch: expected={expected}, actual={actual}"
+        )
+
+
 def inspect_fastwam_checkpoint_contract(
     pretrained_path: str | Path,
     *,
@@ -797,20 +932,7 @@ def inspect_fastwam_checkpoint_contract(
         )
     finger_signs = (float(finger_sign_values[0]), float(finger_sign_values[1]))
 
-    expected_action_contract = {
-        "dim": FASTWAM_ACTION_DIM,
-        "type": "adjacent_delta_eef",
-        "translation": "p[t+1]-p[t] in base frame, meter",
-        "rotation": "Log(R[t].T @ R[t+1]) body rotvec, radian",
-        "gripper": "absolute next target; 0=closed, 1=open",
-        "delta_dimension_mask": [True, True, True, True, True, True, False],
-    }
-    actual_action_contract = {key: action_contract.get(key) for key in expected_action_contract}
-    if actual_action_contract != expected_action_contract:
-        raise FrankaAsyncPolicyContractError(
-            "FastWAM action representation mismatch: "
-            f"expected={expected_action_contract}, actual={actual_action_contract}"
-        )
+    action_label_mode = _resolve_fastwam_action_label_mode(action_contract)
     if gripper_calibration.get("raw_open") != 0.0 or gripper_calibration.get("raw_closed") != 0.8:
         raise FrankaAsyncPolicyContractError("FastWAM gripper calibration must be raw_open=0.0/raw_closed=0.8")
     if gripper_calibration.get("clip") is not True:
@@ -946,6 +1068,14 @@ def inspect_fastwam_checkpoint_contract(
     # source of truth (it may have been reserialized at a different precision).
     configured_normalizer = _load_fastwam_minmax_normalizer(configured_stats_path)
     run_normalizer = _load_fastwam_minmax_normalizer(run_stats_path)
+    _validate_fastwam_stats_action_label(
+        configured_stats_path,
+        action_label_mode=action_label_mode,
+    )
+    _validate_fastwam_stats_action_label(
+        run_stats_path,
+        action_label_mode=action_label_mode,
+    )
     for field_name in ("state_min", "state_max", "action_min", "action_max"):
         if not torch.equal(
             getattr(run_normalizer, field_name), getattr(configured_normalizer, field_name)
@@ -979,6 +1109,7 @@ def inspect_fastwam_checkpoint_contract(
         observation_fps=observation_fps,
         action_fps=action_fps,
         chunk_size=chunk_size,
+        action_label_mode=action_label_mode,
         action_video_freq_ratio=action_video_freq_ratio,
         num_video_frames=num_video_frames,
         video_fps=video_fps,
@@ -1123,7 +1254,17 @@ def validate_franka_checkpoint(
     return checkpoint_dir
 
 
-def _decode_absolute_action_chunk(anchor_state: np.ndarray, relative_chunk: torch.Tensor) -> torch.Tensor:
+def _quaternion_chunk_with_anchor_continuity(
+    anchor_rotation: np.ndarray,
+    target_rotations: np.ndarray,
+) -> np.ndarray:
+    anchor_quaternion = matrix_to_quaternion_xyzw(anchor_rotation).reshape(1, 4)
+    target_quaternions = matrix_to_quaternion_xyzw(target_rotations).reshape(-1, 4)
+    trajectory = np.concatenate((anchor_quaternion, target_quaternions), axis=0)
+    return enforce_quaternion_continuity(trajectory)[1:]
+
+
+def _decode_pi0_delta_action_chunk(anchor_state: np.ndarray, relative_chunk: torch.Tensor) -> torch.Tensor:
     if anchor_state.shape != (STATE_DIM,):
         raise FrankaAsyncPolicyContractError(
             f"Franka anchor state must have shape ({STATE_DIM},), got {anchor_state.shape}"
@@ -1148,7 +1289,7 @@ def _decode_absolute_action_chunk(anchor_state: np.ndarray, relative_chunk: torc
             relative_numpy,
         )
         gripper = np.clip(gripper, 0.0, 1.0)
-        quaternion = enforce_quaternion_continuity(matrix_to_quaternion_xyzw(rotation))
+        quaternion = _quaternion_chunk_with_anchor_continuity(anchor_rotation, rotation)
         absolute = np.concatenate((position, quaternion, gripper), axis=-1)
     except (TypeError, ValueError) as exc:
         raise FrankaAsyncPolicyContractError("Failed to decode the relative Franka action chunk") from exc
@@ -1160,6 +1301,57 @@ def _decode_absolute_action_chunk(anchor_state: np.ndarray, relative_chunk: torc
         )
     if not np.all(np.isfinite(absolute)):
         raise FrankaAsyncPolicyContractError("Absolute action chunk contains NaN or Inf")
+    return torch.as_tensor(absolute, dtype=torch.float32, device="cpu")
+
+
+def _decode_absolute_eef_action_chunk(
+    anchor_state: np.ndarray,
+    absolute_chunk: torch.Tensor,
+    *,
+    gripper_encoding: str,
+) -> torch.Tensor:
+    """Decode absolute7 pose targets into canonical absolute8 client actions."""
+
+    state = np.asarray(anchor_state, dtype=np.float64)
+    if state.shape != (STATE_DIM,) or not np.all(np.isfinite(state)):
+        raise FrankaAsyncPolicyContractError(
+            f"Franka anchor state must be finite shape ({STATE_DIM},), got {state.shape}"
+        )
+    action = torch.as_tensor(absolute_chunk)
+    if (
+        action.ndim != 2
+        or action.shape[0] <= 0
+        or action.shape[1] != ACTION_DIM
+        or not action.is_floating_point()
+        or not bool(torch.isfinite(action).all())
+    ):
+        raise FrankaAsyncPolicyContractError(
+            f"Absolute EEF action must be finite floating [K,{ACTION_DIM}], got {tuple(action.shape)}"
+        )
+    values = action.detach().to(device="cpu", dtype=torch.float64).numpy()
+    try:
+        anchor_rotation = rotation_6d_to_matrix(state[3:9])
+        positions, rotations, gripper = decode_absolute_action(values)
+        quaternion = _quaternion_chunk_with_anchor_continuity(
+            anchor_rotation,
+            rotations,
+        )
+    except (TypeError, ValueError) as exc:
+        raise FrankaAsyncPolicyContractError("Failed to decode the absolute EEF action chunk") from exc
+
+    gripper = np.clip(gripper, 0.0, 1.0)
+    if gripper_encoding == "open_0_1":
+        gripper_closed = 1.0 - gripper
+    elif gripper_encoding == "closed_0_1":
+        gripper_closed = gripper
+    else:
+        raise FrankaAsyncPolicyContractError(
+            f"Unsupported absolute EEF gripper encoding {gripper_encoding!r}"
+        )
+    absolute = np.concatenate((positions, quaternion, gripper_closed), axis=-1)
+    expected_shape = (len(values), ABSOLUTE_ACTION_DIM)
+    if absolute.shape != expected_shape or not np.all(np.isfinite(absolute)):
+        raise FrankaAsyncPolicyContractError("Decoded absolute EEF action chunk is invalid")
     return torch.as_tensor(absolute, dtype=torch.float32, device="cpu")
 
 
@@ -1282,16 +1474,27 @@ def _build_fastwam_state(
 
 def _decode_fastwam_absolute_action_chunk(
     anchor_state: np.ndarray,
-    adjacent_chunk: torch.Tensor,
+    action_chunk: torch.Tensor,
+    *,
+    action_label_mode: str = ACTION_LABEL_MODE_DELTA_EEF,
 ) -> torch.Tensor:
-    """Cumulatively integrate adjacent FastWAM deltas into canonical absolute8 actions."""
+    """Decode a mode-aware FastWAM action chunk into canonical absolute8 actions."""
+
+    if action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+        return _decode_absolute_eef_action_chunk(
+            anchor_state,
+            action_chunk,
+            gripper_encoding="open_0_1",
+        )
+    if action_label_mode != ACTION_LABEL_MODE_DELTA_EEF:
+        raise FrankaAsyncPolicyContractError(f"Unsupported FastWAM action_label_mode {action_label_mode!r}")
 
     state = np.asarray(anchor_state, dtype=np.float64)
     if state.shape != (STATE_DIM,) or not np.all(np.isfinite(state)):
         raise FrankaAsyncPolicyContractError(
             f"FastWAM anchor state must be finite shape ({STATE_DIM},), got {state.shape}"
         )
-    action = torch.as_tensor(adjacent_chunk, device="cpu")
+    action = torch.as_tensor(action_chunk, device="cpu")
     if (
         action.ndim != 2
         or action.shape[0] <= 0
@@ -1314,7 +1517,10 @@ def _decode_fastwam_absolute_action_chunk(
             rotation = rotation @ so3_exp(row[3:6])
             positions[index] = position
             rotations[index] = rotation
-        quaternion = enforce_quaternion_continuity(matrix_to_quaternion_xyzw(rotations))
+        quaternion = _quaternion_chunk_with_anchor_continuity(
+            rotation_6d_to_matrix(state[3:9]),
+            rotations,
+        )
     except ValueError as exc:
         raise FrankaAsyncPolicyContractError("Failed to integrate FastWAM adjacent actions") from exc
 
@@ -1594,6 +1800,10 @@ class FrankaPI0PolicyServer(PolicyServer):
 
     prefix = "franka_pi0_policy_server"
 
+    def __init__(self, config: PolicyServerConfig):
+        super().__init__(config)
+        self._checkpoint_contract: FrankaCheckpointContract | None = None
+
     def _resolve_policy_specs(self, client_specs: RemotePolicyConfig) -> RemotePolicyConfig:
         _reject_remote_policy_conflicts(
             self.config,
@@ -1648,12 +1858,14 @@ class FrankaPI0PolicyServer(PolicyServer):
             raise FrankaAsyncPolicyContractError("Franka PI0 policy remained in training mode after eval()")
         self._checkpoint_contract = contract
         self.logger.info(
-            "Strictly loaded Franka PI0 checkpoint from %s | profile=%s task=%r fps=%s chunk_size=%s",
+            "Strictly loaded Franka PI0 checkpoint from %s | "
+            "profile=%s task=%r fps=%s chunk_size=%s action_label_mode=%s",
             checkpoint_dir,
             contract.profile,
             contract.task_instruction,
             contract.observation_fps,
             contract.chunk_size,
+            contract.action_label_mode,
         )
         return policy
 
@@ -1780,13 +1992,30 @@ class FrankaPI0PolicyServer(PolicyServer):
             if not isinstance(action, torch.Tensor) or tuple(action.shape) != (ACTION_DIM,):
                 shape = tuple(action.shape) if isinstance(action, torch.Tensor) else type(action).__name__
                 raise FrankaAsyncPolicyContractError(
-                    f"Relative action {index} must be a ({ACTION_DIM},) tensor, got {shape}"
+                    f"Model action {index} must be a ({ACTION_DIM},) tensor, got {shape}"
                 )
             actions.append(action)
 
-        relative_chunk = torch.stack(actions)
+        model_action_chunk = torch.stack(actions)
         anchor_state = self._extract_anchor_state(observation_t)
-        absolute_chunk = _decode_absolute_action_chunk(anchor_state, relative_chunk)
+        contract = self._checkpoint_contract
+        if contract is None:
+            raise FrankaAsyncPolicyContractError("PI0 checkpoint contract is unset")
+        if contract.action_label_mode == ACTION_LABEL_MODE_DELTA_EEF:
+            absolute_chunk = _decode_pi0_delta_action_chunk(
+                anchor_state,
+                model_action_chunk,
+            )
+        elif contract.action_label_mode == ACTION_LABEL_MODE_ABSOLUTE_EEF:
+            absolute_chunk = _decode_absolute_eef_action_chunk(
+                anchor_state,
+                model_action_chunk,
+                gripper_encoding="closed_0_1",
+            )
+        else:
+            raise FrankaAsyncPolicyContractError(
+                f"Unsupported PI0 action_label_mode {contract.action_label_mode!r}"
+            )
 
         # Mutate only after the whole chunk has passed shape, finite, and geometry
         # validation so callers never observe a partially decoded queue.
@@ -1838,11 +2067,13 @@ class FrankaFastWAMPolicyServer(PolicyServer):
         self._fastwam_runtime = runtime
         self.logger.info(
             "Loaded Franka FastWAM checkpoint from %s | "
-            "task=%r fps=%s chunk_size=%s video_frames=%s video_fps=%s step=%s",
+            "task=%r fps=%s chunk_size=%s action_label_mode=%s "
+            "video_frames=%s video_fps=%s step=%s",
             contract.checkpoint_path,
             contract.task_instruction,
             contract.observation_fps,
             contract.chunk_size,
+            contract.action_label_mode,
             contract.num_video_frames,
             contract.video_fps,
             contract.checkpoint_step,
@@ -2019,8 +2250,12 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                 f"FastWAM normalized action must have shape {expected_shape}, "
                 f"got {tuple(normalized_action.shape)}"
             )
-        adjacent_action = runtime.normalizer.denormalize_action(normalized_action)
-        absolute_action = _decode_fastwam_absolute_action_chunk(anchor_state, adjacent_action)
+        physical_action = runtime.normalizer.denormalize_action(normalized_action)
+        absolute_action = _decode_fastwam_absolute_action_chunk(
+            anchor_state,
+            physical_action,
+            action_label_mode=contract.action_label_mode,
+        )
         return self._time_action_chunk(
             observation_t.get_timestamp(),
             list(absolute_action),
