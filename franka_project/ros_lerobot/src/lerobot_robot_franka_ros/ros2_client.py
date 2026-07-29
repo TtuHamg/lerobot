@@ -3,7 +3,7 @@
 import logging
 import math
 import threading
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, field, replace
 from pprint import pformat
 
 import draccus
@@ -16,6 +16,7 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from .config_franka_ros import FrankaRosConfig
 from .contract import FASTWAM_RENAME_MAP, FRANKA_POLICY_TYPES, PI0_RENAME_MAP
 from .franka_ros import FrankaRos
+from .visualization_launcher import ActionVisualizationLauncher, ActionVisualizationLaunchSpec
 
 
 _FASTWAM_SENSOR_CONTRACT = {
@@ -25,6 +26,50 @@ _FASTWAM_SENSOR_CONTRACT = {
     "gripper_topic": "/gripper/joint_states",
     "gripper_joint_name": "robotiq_85_left_knuckle_joint",
 }
+
+
+@dataclass
+class FrankaRos2ClientConfig(RobotClientConfig):
+    """Client-only options for the chunk-aware Franka ROS2 entry point."""
+
+    visualize_action: bool = field(
+        default=False,
+        metadata={"help": "Launch the read-only Franka action visualizer with this client."},
+    )
+    visualization_launch_rviz: bool = field(
+        default=True,
+        metadata={
+            "help": "Also launch RViz when visualize_action=true; false runs only the marker node."
+        },
+    )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.visualize_action, bool):
+            raise ValueError("visualize_action must be a bool")
+        if not isinstance(self.visualization_launch_rviz, bool):
+            raise ValueError("visualization_launch_rviz must be a bool")
+
+
+def _make_action_visualization_launcher(
+    config: FrankaRos2ClientConfig,
+    *,
+    logger: logging.Logger,
+) -> ActionVisualizationLauncher:
+    robot = config.robot
+    if not isinstance(robot, FrankaRosConfig):
+        raise TypeError("Action visualization requires robot.type=franka_ros")
+    return ActionVisualizationLauncher(
+        ActionVisualizationLaunchSpec(
+            launch_rviz=config.visualization_launch_rviz,
+            fixed_frame=robot.base_frame,
+            action_chunk_topic=robot.action_chunk_topic,
+            current_pose_topic=robot.eef_pose_topic,
+            camera1_topic=robot.camera1_topic,
+            camera2_topic=robot.camera2_topic,
+        ),
+        logger=logger,
+    )
 
 
 def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClientConfig:
@@ -184,7 +229,7 @@ class FrankaRos2RobotClient(RobotClient):
 
 
 @draccus.wrap()
-def ros2_async_client(cfg: RobotClientConfig) -> None:
+def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
     """Run the standard async loops with the Franka chunk hook enabled."""
 
     cfg = resolve_franka_client_policy_config(cfg)
@@ -194,18 +239,37 @@ def ros2_async_client(cfg: RobotClientConfig) -> None:
         client.stop()
         return
 
-    client.logger.info("Starting action receiver thread with ROS2 chunk publication")
-    action_receiver_thread = threading.Thread(
-        target=client.receive_actions,
-        name="franka-ros2-action-receiver",
-        daemon=True,
-    )
-    action_receiver_thread.start()
+    visualization_launcher: ActionVisualizationLauncher | None = None
+    action_receiver_thread: threading.Thread | None = None
     try:
+        if cfg.visualize_action:
+            visualization_launcher = _make_action_visualization_launcher(
+                cfg,
+                logger=client.logger,
+            )
+            visualization_launcher.start()
+
+        client.logger.info("Starting action receiver thread with ROS2 chunk publication")
+        action_receiver_thread = threading.Thread(
+            target=client.receive_actions,
+            name="franka-ros2-action-receiver",
+            daemon=True,
+        )
+        action_receiver_thread.start()
         client.control_loop(task=cfg.task)
     finally:
-        client.stop()
-        action_receiver_thread.join()
+        try:
+            client.stop()
+        finally:
+            try:
+                if visualization_launcher is not None:
+                    try:
+                        visualization_launcher.stop()
+                    except Exception:
+                        client.logger.exception("Failed to fully stop action visualization")
+            finally:
+                if action_receiver_thread is not None:
+                    action_receiver_thread.join()
         if cfg.debug_visualize_queue_size:
             visualize_action_queue_size(client.action_queue_size)
         client.logger.info("Franka ROS2 interface client stopped")

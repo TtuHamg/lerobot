@@ -224,6 +224,11 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --rename_map='{"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}'
 ```
 
+```bash
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_pi0_schema2   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.8   --task='grab the paper cup.'   --policy_type=pi0   --pretrained_name_or_path=server-owned   --policy_device=cpu   --client_device=cpu   --actions_per_chunk=50   --robot.max_action_chunk_waypoints=50   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map='{"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}' --observation_trigger_mode=post_action_delay --post_action_observation_delay_s=3
+```
+
+
 主 manifest 应保持：
 
 ```text

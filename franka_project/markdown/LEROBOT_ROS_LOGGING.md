@@ -113,7 +113,9 @@ monotonic receive time；消息自身 header/source 时间也单独保留。
 
 - Recorder 不订阅 `/franka/safe_joint_command`，不会改变 Gateway 用于判断 controller
   subscriber 是否存在的安全拓扑。
-- 不把两路 camera image 用文本写入日志；图像需要使用 `ros2 bag record -s mcap`。
+- 不把两路 camera image 用文本写入日志；使用
+  [`record_franka_topics.sh`](./FRANKA_TOPIC_RECORDING.md) 可选择任意 topic 写 MCAP，
+  仅选择相机时自动写 MP4。
 - applied feedback 执行期间约为 200 Hz，长时间运行前应检查磁盘空间。
 - Recorder 只观察 topic，不调用 arm service、不发布 command，也不会改变 Gateway
   `enabled/shadow/armed` 状态。

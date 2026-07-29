@@ -176,6 +176,7 @@ outputs/
 *.urdf
 *.xml
 !franka_project/ros2_ws/src/lerobot_franka_interfaces/package.xml
+!franka_project/ros2_ws/src/franka_lerobot_rviz/package.xml
 *.part
 
 output_lerobot/
@@ -188,6 +189,8 @@ tests/
 !franka_project/tests/
 franka_project/tests/*
 !franka_project/tests/test_export_fastwam_async_fixture.py
+!franka_project/tests/test_record_franka_topics.py
+!franka_project/tests/test_franka_visualization_launcher.py
 logs/
 notebook/
 *md

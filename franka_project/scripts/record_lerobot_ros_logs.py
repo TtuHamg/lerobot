@@ -59,6 +59,8 @@ SELECTED_OPTION_NAMES = (
     "observation_trigger_mode",
     "post_action_observation_delay_s",
     "debug_visualize_queue_size",
+    "visualize_action",
+    "visualization_launch_rviz",
     "robot.type",
     "robot.id",
     "robot.dry_run",
@@ -86,6 +88,8 @@ RELATED_PROCESS_MARKERS = (
     "serve_franka_pi0_async",
     "franka_cartesian_safety_gateway",
     "joint_impedance_ik_controller",
+    "franka_lerobot_rviz",
+    "franka_action_chunk_visualizer",
     "ws_tcp_tunnel",
 )
 

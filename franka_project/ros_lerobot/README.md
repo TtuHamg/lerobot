@@ -84,6 +84,63 @@ python -m lerobot_robot_franka_ros.ros2_client ... \
   --aggregate_fn_name=latest_only
 ```
 
+### Optional action visualization
+
+The chunk-aware client can own the read-only action visualizer and RViz lifecycle. The switch is a
+top-level client option, not a `robot` option, and defaults to disabled:
+
+```bash
+python -m lerobot_robot_franka_ros.ros2_client ... \
+  --robot.type=franka_ros \
+  --visualize_action=true
+```
+
+Use `--visualization_launch_rviz=false` to run only the visualization/marker node without opening
+RViz. The client passes its resolved action chunk, current EEF pose, camera1, camera2, and base-frame
+configuration to the launch file. If the requested launch cannot start, the client exits with a clear
+error; on normal exit or interruption it stops and reaps the launch process group.
+
+Build and source the in-repository ROS workspace before using the switch. Source the Franka and Haply
+underlays first; the Haply overlay supplies the observed `franka_safety_interfaces` messages:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /home/pnp/franka/franka_ros2_ws/install/local_setup.bash
+source /home/pnp/franka/haply_ros/install/local_setup.bash
+cd /home/pnp/Projects/lerobot/franka_project/ros2_ws
+colcon build --symlink-install --packages-up-to franka_lerobot_rviz
+source install/local_setup.bash
+```
+
+The standalone launch remains supported when the client switch is left disabled, for example from a
+separate terminal:
+
+```bash
+ros2 launch franka_lerobot_rviz action_viz.launch.py
+```
+
+Use either client-owned or standalone launch for a run so duplicate visualizer/RViz nodes are not
+started accidentally.
+
+### Selective MCAP / MP4 recording
+
+After the client and ROS publishers are running, the read-only recorder can select aliases or any
+absolute ROS topic. Mixed/non-image selections use MCAP; a camera-only selection uses one MP4 per
+camera:
+
+```bash
+# camera1.mp4 + camera2.mp4
+franka_project/scripts/record_franka_topics.sh --topics camera1 camera2
+
+# MCAP containing raw camera, joint-position, and EEF streams
+franka_project/scripts/record_franka_topics.sh \
+  --topics camera1 camera2 current_pos eef
+```
+
+See [`../markdown/FRANKA_TOPIC_RECORDING.md`](../markdown/FRANKA_TOPIC_RECORDING.md) for aliases,
+custom topics, duration/output options, QoS overrides, and the distinction between raw ROS streams
+and the synchronized observation snapshot selected inside the client.
+
 ROS imports remain lazy. Build and source `../ros2_ws` only before starting the ROS2 mode; importing
 the plugin or running dry-run does not require `rclpy`.
 
