@@ -24,6 +24,7 @@ python src/lerobot/async_inference/robot_client.py \
     --server_address=127.0.0.1:8080 \
     --client_device=cpu \
     --chunk_size_threshold=0.5 \
+    --action_offset=1 \
     --enable_pending_observation=True \
     --pending_observation_timeout_s=2.0 \
     --aggregate_fn_name=weighted_average \
@@ -35,6 +36,8 @@ import logging
 import pickle  # nosec
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import asdict
 from pprint import pformat
@@ -65,6 +68,7 @@ from lerobot.utils.import_utils import register_third_party_plugins
 
 from .configs import RobotClientConfig
 from .helpers import (
+    ASYNC_INFERENCE_PROTOCOL_VERSION,
     Action,
     FPSTracker,
     Observation,
@@ -99,12 +103,13 @@ class RobotClient:
         self.server_address = config.server_address
 
         self.policy_config = RemotePolicyConfig(
-            config.policy_type,
-            config.pretrained_name_or_path,
-            lerobot_features,
-            config.actions_per_chunk,
-            config.policy_device,
-            config.rename_map,
+            policy_type=config.policy_type,
+            pretrained_name_or_path=config.pretrained_name_or_path,
+            lerobot_features=lerobot_features,
+            actions_per_chunk=config.actions_per_chunk,
+            device=config.policy_device,
+            rename_map=config.rename_map,
+            fps=config.fps,
         )
         self.channel = grpc.insecure_channel(
             self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
@@ -123,6 +128,13 @@ class RobotClient:
         self._pending_observation_lock = threading.Lock()
         self._pending_observation = False
         self._pending_observation_sent_at = None
+        self._pending_observation_request_id: str | None = None
+        self._pending_observation_value: TimedObservation | None = None
+        self._pending_observation_retry_due = False
+        self._client_session_id = uuid.uuid4().hex
+        self._next_observation_sequence = 0
+        self._committed_action_chunks_lock = threading.Lock()
+        self._committed_action_chunks: OrderedDict[str, None] = OrderedDict()
 
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
@@ -163,15 +175,55 @@ class RobotClient:
                 f"Actions per chunk: {self.policy_config.actions_per_chunk}"
             )
 
-            self.stub.SendPolicyInstructions(policy_setup)
+            setup_ack = self.stub.SendPolicyInstructions(policy_setup)
+            self._validate_policy_setup_ack(setup_ack)
 
             self.shutdown_event.clear()
 
             return True
 
-        except grpc.RpcError as e:
+        except (grpc.RpcError, RuntimeError, TypeError, ValueError) as e:
+            self.shutdown_event.set()
             self.logger.error(f"Failed to connect to policy server: {e}")
             return False
+
+    def _validate_policy_setup_ack(self, ack: services_pb2.PolicySetupAck) -> None:
+        """Fail closed unless the server confirms the resolved wire contract."""
+
+        if not isinstance(ack, services_pb2.PolicySetupAck):
+            raise TypeError(f"Unexpected policy setup response type: {type(ack)}")
+
+        mismatches = []
+        if ack.protocol_version != ASYNC_INFERENCE_PROTOCOL_VERSION:
+            mismatches.append(
+                f"protocol server={ack.protocol_version} client={ASYNC_INFERENCE_PROTOCOL_VERSION}"
+            )
+        if ack.fps != self.config.fps:
+            mismatches.append(f"fps server={ack.fps} client={self.config.fps}")
+
+        requested_policy = self.policy_config.policy_type
+        if requested_policy is None:
+            if not ack.policy_type:
+                mismatches.append("server returned an empty policy_type")
+        elif ack.policy_type != requested_policy:
+            mismatches.append(
+                f"policy_type server={ack.policy_type!r} client={requested_policy!r}"
+            )
+
+        requested_chunk = self.policy_config.actions_per_chunk
+        if requested_chunk is None:
+            if ack.actions_per_chunk <= 0:
+                mismatches.append("server returned a non-positive actions_per_chunk")
+        elif ack.actions_per_chunk != requested_chunk:
+            mismatches.append(
+                f"actions_per_chunk server={ack.actions_per_chunk} client={requested_chunk}"
+            )
+
+        if mismatches:
+            raise RuntimeError(
+                "Policy setup acknowledgement mismatch; synchronize client/server checkouts: "
+                + "; ".join(mismatches)
+            )
 
     def stop(self):
         """Stop the robot client"""
@@ -195,6 +247,28 @@ class RobotClient:
         if not isinstance(obs, TimedObservation):
             raise ValueError("Input observation needs to be a TimedObservation!")
 
+        if obs.request_id is None:
+            with self._pending_observation_lock:
+                sequence = self._next_observation_sequence
+                self._next_observation_sequence += 1
+            obs.request_id = f"{self._client_session_id}:{sequence}"
+        elif not isinstance(obs.request_id, str) or not obs.request_id:
+            raise ValueError("TimedObservation.request_id must be a non-empty string")
+
+        if self.config.enable_pending_observation:
+            # Arm the gate before the RPC so a very fast action response cannot
+            # commit first and then be overwritten by this pending state.
+            with self._pending_observation_lock:
+                self._pending_observation = True
+                self._pending_observation_sent_at = time.perf_counter()
+                self._pending_observation_request_id = obs.request_id
+                self._pending_observation_value = obs
+                self._pending_observation_retry_due = False
+
+        return self._send_observation_rpc(obs)
+
+    def _send_observation_rpc(self, obs: TimedObservation) -> bool:
+        """Send an already identified observation without changing its logical request."""
         # Wall-clock timestamps are used because this value is compared on the
         # remote server. The client and server clocks must be synchronized.
         obs.client_send_timestamp = time.time()
@@ -211,18 +285,90 @@ class RobotClient:
                 silent=True,
             )
             _ = self.stub.SendObservations(observation_iterator)
-            if self.config.enable_pending_observation:
-                with self._pending_observation_lock:
-                    self._pending_observation = True
-                    self._pending_observation_sent_at = time.perf_counter()
             obs_timestep = obs.get_timestep()
             self.logger.debug(f"Sent observation #{obs_timestep} | ")
+
+            if self.config.enable_pending_observation:
+                with self._pending_observation_lock:
+                    if self._pending_observation_request_id == obs.request_id:
+                        # A successful SendObservations RPC proves the server
+                        # received this request. READY_UNACKED GetActions replay
+                        # handles a lost action response, so the observation
+                        # payload is only retained while delivery is uncertain.
+                        self._pending_observation_value = None
+                        self._pending_observation_retry_due = False
 
             return True
 
         except grpc.RpcError as e:
+            if self.config.enable_pending_observation:
+                with self._pending_observation_lock:
+                    if self._pending_observation_request_id == obs.request_id:
+                        self._pending_observation = True
+                        self._pending_observation_sent_at = None
+                        self._pending_observation_retry_due = True
+                        # Keep the same observation/request_id for a later
+                        # transport retry. A new observation with the same
+                        # execution timestep is a different logical request.
             self.logger.error(f"Error sending observation #{obs.get_timestep()}: {e}")
             return False
+
+    def _action_chunk_is_committed(self, chunk_id: str) -> bool:
+        with self._committed_action_chunks_lock:
+            return chunk_id in self._committed_action_chunks
+
+    def _remember_committed_action_chunk(self, chunk_id: str) -> None:
+        if not chunk_id:
+            return
+        with self._committed_action_chunks_lock:
+            self._committed_action_chunks[chunk_id] = None
+            self._committed_action_chunks.move_to_end(chunk_id)
+            while len(self._committed_action_chunks) > 1024:
+                self._committed_action_chunks.popitem(last=False)
+
+    def _resolve_pending_observation(self, request_id: str) -> None:
+        if not self.config.enable_pending_observation:
+            return
+        with self._pending_observation_lock:
+            if request_id and request_id != self._pending_observation_request_id:
+                # A delayed response must not clear a newer observation's gate.
+                return
+            self._pending_observation = False
+            self._pending_observation_sent_at = None
+            self._pending_observation_request_id = None
+            self._pending_observation_value = None
+            self._pending_observation_retry_due = False
+
+    def _claim_pending_observation_retry(self) -> TimedObservation | None:
+        """Atomically claim a retry without re-arming a request cleared by an ACK."""
+        if not self.config.enable_pending_observation:
+            return None
+        with self._pending_observation_lock:
+            if (
+                not self._pending_observation
+                or not self._pending_observation_retry_due
+                or self._pending_observation_value is None
+            ):
+                return None
+
+            observation = self._pending_observation_value
+            self._pending_observation_retry_due = False
+            self._pending_observation_sent_at = time.perf_counter()
+            return observation
+
+    def _ack_action_delivery(self, actions_chunk) -> None:
+        chunk_id = str(getattr(actions_chunk, "chunk_id", ""))
+        request_id = str(getattr(actions_chunk, "request_id", ""))
+        if not chunk_id or not request_id:
+            return  # Legacy server: bytes-only Actions has no ACK contract.
+        self.stub.AckActions(
+            services_pb2.ActionDeliveryAck(
+                request_id=request_id,
+                chunk_id=chunk_id,
+                source_timestep=int(actions_chunk.source_timestep),
+            ),
+            timeout=self.config.pending_observation_timeout_s,
+        )
 
     def _inspect_action_queue(self):
         with self.action_queue_lock:
@@ -230,6 +376,16 @@ class RobotClient:
             timestamps = sorted([action.get_timestep() for action in self.action_queue.queue])
         self.logger.debug(f"Queue size: {queue_size}, Queue contents: {timestamps}")
         return queue_size, timestamps
+
+    def _effective_action_chunk_size(self, incoming_actions: list[TimedAction]) -> int:
+        """Return the nominal queue capacity represented by an incoming chunk.
+
+        Subclasses that intentionally commit only a bounded subset of a server
+        response can override this so ``chunk_size_threshold`` is normalized by
+        the number of actions the local queue can actually retain.
+        """
+
+        return len(incoming_actions)
 
     def _aggregate_action_queues(
         self,
@@ -290,11 +446,31 @@ class RobotClient:
                     continue  # received `Empty` from server, wait for next call
 
                 receive_time = time.time()
+                chunk_id = str(getattr(actions_chunk, "chunk_id", ""))
+                request_id = str(getattr(actions_chunk, "request_id", ""))
+                if chunk_id and self._action_chunk_is_committed(chunk_id):
+                    self.logger.info(
+                        "Received duplicate action chunk %s; skipping local commit and retrying ACK",
+                        chunk_id,
+                    )
+                    self._resolve_pending_observation(request_id)
+                    self._ack_action_delivery(actions_chunk)
+                    continue
 
                 # Deserialize bytes back into list[TimedAction]
                 deserialize_start = time.perf_counter()
                 timed_actions = pickle.loads(actions_chunk.data)  # nosec
                 deserialize_time = time.perf_counter() - deserialize_start
+                if not isinstance(timed_actions, list) or not timed_actions:
+                    raise ValueError("Action delivery must contain a non-empty list of TimedAction values")
+                if not all(isinstance(action, TimedAction) for action in timed_actions):
+                    raise TypeError("Action delivery contains a value that is not a TimedAction")
+                if bool(chunk_id) != bool(request_id):
+                    raise ValueError("ACK-capable action delivery must contain both request_id and chunk_id")
+                if chunk_id and int(actions_chunk.source_timestep) != timed_actions[0].get_timestep():
+                    raise ValueError(
+                        "Action delivery source_timestep does not match its first TimedAction"
+                    )
 
                 server_send_timestamp = (
                     getattr(timed_actions[0], "server_send_timestamp", None) if timed_actions else None
@@ -310,11 +486,6 @@ class RobotClient:
 
                 # Log device type of received actions
                 if len(timed_actions) > 0:
-                    if self.config.enable_pending_observation:
-                        with self._pending_observation_lock:
-                            self._pending_observation = False
-                            self._pending_observation_sent_at = None
-
                     received_device = timed_actions[0].get_action().device.type
                     self.logger.debug(f"Received actions on device: {received_device}")
 
@@ -328,7 +499,10 @@ class RobotClient:
                 else:
                     self.logger.debug(f"Actions kept on device: {client_device}")
 
-                self.action_chunk_size = max(self.action_chunk_size, len(timed_actions))
+                effective_action_chunk_size = self._effective_action_chunk_size(timed_actions)
+                if effective_action_chunk_size <= 0:
+                    raise ValueError("Effective action chunk size must be positive")
+                self.action_chunk_size = max(self.action_chunk_size, effective_action_chunk_size)
 
                 # Calculate network latency if we have matching observations
                 if len(timed_actions) > 0 and verbose:
@@ -361,7 +535,13 @@ class RobotClient:
                 self._aggregate_action_queues(timed_actions, self.config.aggregate_fn)
                 queue_update_time = time.perf_counter() - start_time
 
+                # This is the transport commit boundary. In the Franka client,
+                # the override returns only after the ROS chunk publication has
+                # also succeeded. Never ACK before this point.
+                self._remember_committed_action_chunk(chunk_id)
+                self._resolve_pending_observation(request_id)
                 self.must_go.set()  # after receiving actions, next empty queue triggers must-go processing!
+                self._ack_action_delivery(actions_chunk)
 
                 if verbose:
                     # Get queue state after changes
@@ -384,6 +564,11 @@ class RobotClient:
 
             except grpc.RpcError as e:
                 self.logger.error(f"Error receiving actions: {e}")
+            except Exception as e:
+                # Invalid data or a downstream commit failure remains unacked,
+                # so an ACK-capable server retains the chunk for diagnosis or
+                # retry rather than silently declaring it delivered.
+                self.logger.error(f"Error committing received actions: {e}", exc_info=True)
 
     def actions_available(self):
         """Check if there are actions available in the queue"""
@@ -393,6 +578,16 @@ class RobotClient:
     def _action_tensor_to_action_dict(self, action_tensor: torch.Tensor) -> dict[str, float]:
         action = {key: action_tensor[i].item() for i, key in enumerate(self.robot.action_features)}
         return action
+
+    def _next_observation_timestep(self, latest_action: int) -> int:
+        """Label a new observation relative to the latest locally consumed action.
+
+        With ``action_offset=1``, the server numbers its first predicted action
+        at ``latest_action + 1``. This removes the fixed overlap with the action
+        that has already been consumed while preserving the existing stale
+        filter for actions that genuinely expire during inference.
+        """
+        return max(int(latest_action) + self.config.action_offset, 0)
 
     def control_loop_action(self, verbose: bool = False) -> dict[str, Any]:
         """Reading and performing actions in local queue"""
@@ -432,21 +627,39 @@ class RobotClient:
         if self.config.enable_pending_observation:
             with self._pending_observation_lock:
                 if self._pending_observation:
+                    if self._pending_observation_retry_due:
+                        return True
+
+                    if self._pending_observation_sent_at is None:
+                        return False
                     elapsed = time.perf_counter() - self._pending_observation_sent_at
                     if elapsed <= self.config.pending_observation_timeout_s:
                         return False
 
                     self.logger.warning(
-                        f"Pending observation timed out after {elapsed:.2f}s; sending a new observation."
+                        f"Pending observation timed out after {elapsed:.2f}s; allowing a fresh observation."
                     )
                     self._pending_observation = False
                     self._pending_observation_sent_at = None
+                    self._pending_observation_request_id = None
+                    self._pending_observation_value = None
+                    self._pending_observation_retry_due = False
 
         with self.action_queue_lock:
             return self.action_queue.qsize() / self.action_chunk_size <= self._chunk_size_threshold
 
     def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
         try:
+            retry_observation = self._claim_pending_observation_retry()
+            if retry_observation is not None:
+                self.logger.info(
+                    "Retrying pending observation #%s (request_id=%s)",
+                    retry_observation.get_timestep(),
+                    retry_observation.request_id,
+                )
+                self._send_observation_rpc(retry_observation)
+                return retry_observation.get_observation()
+
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
@@ -459,7 +672,7 @@ class RobotClient:
             observation = TimedObservation(
                 timestamp=time.time(),  # need time.time() to compare timestamps across client and server
                 observation=raw_observation,
-                timestep=max(latest_action, 0),
+                timestep=self._next_observation_timestep(latest_action),
             )
 
             obs_capture_time = time.perf_counter() - start_time

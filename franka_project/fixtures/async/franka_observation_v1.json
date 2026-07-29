@@ -1,0 +1,41 @@
+{
+  "arrays": {
+    "camera1": {
+      "dtype": "uint8",
+      "shape": [
+        480,
+        640,
+        3
+      ]
+    },
+    "camera2": {
+      "dtype": "uint8",
+      "shape": [
+        480,
+        640,
+        3
+      ]
+    },
+    "state": {
+      "dtype": "float32",
+      "shape": [
+        10
+      ]
+    }
+  },
+  "fixture": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/fixtures/async/franka_observation_v1.npz",
+  "fixture_sha256": "788109ef6956b687af60062c9751ac06344c61027e3d4c84594dd277d8a35b1c",
+  "schema_version": 1,
+  "source": {
+    "dataset_root": "/m2v_intern/tujiahang/Projects/lerobot/franka_project/data/lerobot/franka_current_eef_obs15_act15_v1_22of25_76b839b2",
+    "episode_index": 0,
+    "frame_index": 0,
+    "index": 0,
+    "info_sha256": "0820f09150e7516a7f57ee0a2b5b54452edb90cb5a08aaf57ff685a40ce708be",
+    "profile_sha256": "398ec54d71150d2a76303c6282b07e9564bb8eb9203858dafab9edd6fbda4886",
+    "repo_id": "local/franka_current_eef_obs15_act15_v1_22of25_76b839b2",
+    "source_dataset_hash": "957fdcbdbd2264b754db37a7b5f59a498aeb3e5cf151fba015a66b4e693fd062",
+    "task": "stack the cups",
+    "timestamp": 0.0
+  }
+}

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+.cache/
+data/
+experiments/
+checkpoints/
+environment/
+runs/
+
+artifacts/
+reports/
+notebook/
+*md
+!README.md
+!markdown/*.md
