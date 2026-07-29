@@ -99,6 +99,12 @@ FRANKA_POLICY_TYPES = ("pi0", "fastwam")
 
 FASTWAM_STATE_DIM = 8
 FASTWAM_ACTION_DIM = 7
+FASTWAM_RUNTIME_MODEL_TARGET = "fastwam.runtime.create_fastwam"
+FASTWAM_JOINT_RUNTIME_MODEL_TARGET = "fastwam.runtime.create_fastwam_joint"
+FASTWAM_RUNTIME_MODEL_TARGETS = (
+    FASTWAM_RUNTIME_MODEL_TARGET,
+    FASTWAM_JOINT_RUNTIME_MODEL_TARGET,
+)
 FASTWAM_RUNTIME_CONFIG_NAME = "fastwam_runtime.resolved.yaml"
 FASTWAM_DATASET_CONTRACT_NAME = "dataset_contract.json"
 FASTWAM_RUN_STATS_NAME = "dataset_stats.json"
@@ -218,6 +224,7 @@ class FrankaFastWAMCheckpointContract:
     image_width: int
     context_len: int
     model_id: str
+    model_target: str
     checkpoint_step: int
     model_dtype: str
     num_inference_steps: int
@@ -861,6 +868,21 @@ def _validate_fastwam_stats_action_label(
         )
 
 
+def _infer_fastwam_source_checkout(run_dir: Path) -> Path:
+    """Find the FastWAM checkout for both flat and staged training runs."""
+
+    resolved_run_dir = run_dir.expanduser().resolve()
+    for candidate in (resolved_run_dir, *resolved_run_dir.parents):
+        if (candidate / "src" / "fastwam").is_dir() and (
+            candidate / "franka_project" / "src"
+        ).is_dir():
+            return candidate
+    raise FrankaAsyncPolicyContractError(
+        "Could not infer the FastWAM source checkout from the checkpoint run "
+        f"{resolved_run_dir}; expected an ancestor containing src/fastwam and franka_project/src"
+    )
+
+
 def inspect_fastwam_checkpoint_contract(
     pretrained_path: str | Path,
     *,
@@ -885,7 +907,7 @@ def inspect_fastwam_checkpoint_contract(
         )
     checkpoint_step = int(match.group(1))
     run_dir = checkpoint.parent.parent.parent
-    fastwam_repo = run_dir.parents[2]
+    fastwam_repo = _infer_fastwam_source_checkout(run_dir)
     model_base = Path(
         os.environ.get("DIFFSYNTH_MODEL_BASE_PATH", str(fastwam_repo / "checkpoints"))
     ).expanduser().resolve()
@@ -1029,10 +1051,21 @@ def inspect_fastwam_checkpoint_contract(
         or processor.get("action_state_transforms") is not None
     ):
         raise FrankaAsyncPolicyContractError("FastWAM runtime processor normalization contract mismatch")
-    if model.get("_target_") != "fastwam.runtime.create_fastwam":
-        raise FrankaAsyncPolicyContractError("FastWAM runtime model target mismatch")
+    model_target = _nonempty_string(model.get("_target_"), name="FastWAM runtime model target")
+    if model_target not in FASTWAM_RUNTIME_MODEL_TARGETS:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM runtime model target mismatch: "
+            f"expected one of {FASTWAM_RUNTIME_MODEL_TARGETS}, actual={model_target!r}"
+        )
     video_dit = _mapping(model.get("video_dit_config"), name="FastWAM video_dit_config")
     action_dit = _mapping(model.get("action_dit_config"), name="FastWAM action_dit_config")
+    if (
+        model_target == FASTWAM_JOINT_RUNTIME_MODEL_TARGET
+        and video_dit.get("action_conditioned") is not False
+    ):
+        raise FrankaAsyncPolicyContractError(
+            "FastWAMJoint runtime requires video_dit_config.action_conditioned=false"
+        )
     if (
         model.get("proprio_dim") != FASTWAM_STATE_DIM
         or model.get("load_text_encoder") is not False
@@ -1117,6 +1150,7 @@ def inspect_fastwam_checkpoint_contract(
         image_width=image_width,
         context_len=context_len,
         model_id=model_id,
+        model_target=model_target,
         checkpoint_step=checkpoint_step,
         model_dtype=model_dtype,
         num_inference_steps=num_inference_steps,
@@ -1583,13 +1617,8 @@ def _load_fastwam_runtime(
 ) -> _FastWAMRuntime:
     """Lazily reconstruct FastWAM so PI0-only environments never import its stack."""
 
-    fastwam_repo = contract.run_dir.parents[2]
+    fastwam_repo = _infer_fastwam_source_checkout(contract.run_dir)
     source_roots = (fastwam_repo / "src", fastwam_repo / "franka_project" / "src")
-    if not all(path.is_dir() for path in source_roots):
-        raise FrankaAsyncPolicyContractError(
-            "Could not infer the FastWAM source checkout from the checkpoint run; "
-            "expected <FastWAM>/franka_project/runs/<run>"
-        )
     for source_root in source_roots:
         if str(source_root) not in sys.path:
             sys.path.insert(0, str(source_root))
@@ -2227,20 +2256,23 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                         "FastWAM joint video inference produced %s frames", len(joint_video)
                     )
             else:
-                output = self.policy.infer_action(
-                    prompt=None,
-                    input_image=input_image,
-                    action_horizon=contract.chunk_size,
-                    proprio=normalized_state,
-                    context=runtime.context,
-                    context_mask=runtime.context_mask,
-                    text_cfg_scale=1.0,
-                    num_inference_steps=contract.num_inference_steps,
-                    sigma_shift=None,
-                    seed=contract.seed,
-                    rand_device="cpu",
-                    tiled=False,
-                )
+                infer_action_kwargs: dict[str, Any] = {
+                    "prompt": None,
+                    "input_image": input_image,
+                    "action_horizon": contract.chunk_size,
+                    "proprio": normalized_state,
+                    "context": runtime.context,
+                    "context_mask": runtime.context_mask,
+                    "text_cfg_scale": 1.0,
+                    "num_inference_steps": contract.num_inference_steps,
+                    "sigma_shift": None,
+                    "seed": contract.seed,
+                    "rand_device": "cpu",
+                    "tiled": False,
+                }
+                if contract.model_target == FASTWAM_JOINT_RUNTIME_MODEL_TARGET:
+                    infer_action_kwargs["num_video_frames"] = contract.num_video_frames
+                output = self.policy.infer_action(**infer_action_kwargs)
         if not isinstance(output, Mapping) or not isinstance(output.get("action"), torch.Tensor):
             raise FrankaAsyncPolicyContractError("FastWAM infer_action returned no tensor action")
         normalized_action = output["action"].detach().to(device="cpu", dtype=torch.float32)

@@ -38,7 +38,7 @@ model:
 
 training:
   seed: 1000
-  epochs: 50
+  epochs: 10
   steps: auto
   per_device_batch_size: 16
   gradient_accumulation_steps: 1
@@ -56,13 +56,13 @@ training:
   log_freq: 50
   monitor_freq_epochs: 1
   monitor_max_samples: 1024
-  save_freq_epochs: 10
+  save_freq_epochs: 2
   save_optimizer_state: true
   require_gradient_coverage: true
   gpu_count: 2
 
 output:
-  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2
+  root: /m2v_intern/tujiahang/Projects/lerobot/franka_project/experiments/pi0_ActTrans_PaliGemma_eef_grab_cups_obs30_act30_k50_v2_epoch10
   immutable_run_directory: true
   save_to_hub: false
 
