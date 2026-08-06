@@ -36,6 +36,19 @@ _NANOSECONDS_PER_SECOND = 1_000_000_000
 _SCHEMA_VERSION = 1
 
 
+def _clamp_continuous_gripper_commands(
+    values: Sequence[float], *, minimum: float, maximum: float
+) -> tuple[list[float], float, float, int]:
+    """Saturate finite continuous model targets to the hardware safety range."""
+
+    raw = [float(value) for value in values]
+    if not raw or not all(math.isfinite(value) for value in raw):
+        raise JointRos2RuntimeStateError("gripper action chunk must contain non-empty finite values")
+    clamped = [min(max(value, minimum), maximum) for value in raw]
+    clamped_count = sum(output != source for source, output in zip(raw, clamped, strict=True))
+    return clamped, min(raw), max(raw), clamped_count
+
+
 class JointRos2RuntimeUnavailableError(RuntimeError):
     """Raised when the optional ROS 2 runtime has not been built or sourced."""
 
@@ -57,6 +70,8 @@ class _RosBindings:
     image_type: type
     joint_state_type: type
     action_chunk_type: type
+    action_chunk_ack_type: type
+    safety_gateway_status_type: type
 
 
 def _load_ros_bindings() -> _RosBindings:
@@ -64,7 +79,11 @@ def _load_ros_bindings() -> _RosBindings:
 
     try:
         import rclpy
-        from lerobot_franka_interfaces.msg import JointActionChunk as JointActionChunkMsg
+        from lerobot_franka_interfaces.msg import (
+            JointActionChunk as JointActionChunkMsg,
+            JointActionChunkAck,
+            SafetyGatewayStatus,
+        )
         from rclpy.context import Context
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -94,8 +113,21 @@ def _load_ros_bindings() -> _RosBindings:
         image_type=Image,
         joint_state_type=JointState,
         action_chunk_type=JointActionChunkMsg,
+        action_chunk_ack_type=JointActionChunkAck,
+        safety_gateway_status_type=SafetyGatewayStatus,
     )
 
+
+
+@dataclass(slots=True)
+class _PlanProgress:
+    session_id: str
+    plan_id: int
+    published_monotonic: float
+    ack_received: bool = False
+    seen_active: bool = False
+    completed: bool = False
+    error: str | None = None
 
 def _message_stamp_ns(message: Any) -> int:
     stamp = message.header.stamp
@@ -144,6 +176,9 @@ class JointRos2Runtime:
         self._spin_error: BaseException | None = None
         self._last_callback_error: dict[str, float] = {}
 
+        self._plan_lock = threading.Lock()
+        self._plan_progress: _PlanProgress | None = None
+        self._latest_gateway_status: Any | None = None
     @property
     def is_running(self) -> bool:
         with self._lifecycle_lock:
@@ -223,6 +258,10 @@ class JointRos2Runtime:
                         sensor_qos,
                     ),
                 ]
+                subscriptions.extend([
+                    node.create_subscription(bindings.action_chunk_ack_type, self.config.action_chunk_ack_topic, self._action_chunk_ack_callback, action_qos),
+                    node.create_subscription(bindings.safety_gateway_status_type, self.config.safety_gateway_status_topic, self._safety_gateway_status_callback, action_qos),
+                ])
                 publisher = node.create_publisher(
                     bindings.action_chunk_type,
                     self.config.action_chunk_topic,
@@ -349,7 +388,88 @@ class JointRos2Runtime:
                     raise JointRos2RuntimeStateError("ROS2 executor failed") from self._spin_error
                 raise JointRos2RuntimeStateError("ROS2 runtime is not running")
             message = self._action_chunk_message(chunk)
-            self._publisher.publish(message)
+            with self._plan_lock:
+                if self._plan_progress is not None:
+                    raise JointRos2RuntimeStateError(
+                        "cannot publish a new joint plan while the previous plan is pending"
+                    )
+                self._plan_progress = _PlanProgress(
+                    session_id=chunk.session_id,
+                    plan_id=chunk.plan_id,
+                    published_monotonic=time.monotonic(),
+                )
+            try:
+                self._publisher.publish(message)
+            except BaseException:
+                with self._plan_lock:
+                    self._plan_progress = None
+                raise
+
+    def _action_chunk_ack_callback(self, message: Any) -> None:
+        with self._plan_lock:
+            progress = self._plan_progress
+            if progress is None:
+                return
+            if (
+                str(message.session_id) != progress.session_id
+                or int(message.plan_id) != progress.plan_id
+            ):
+                return
+            progress.ack_received = True
+            if not bool(message.accepted):
+                progress.error = (
+                    f"joint gateway rejected plan {progress.session_id}/{progress.plan_id}: "
+                    f"{message.detail}"
+                )
+
+    def _safety_gateway_status_callback(self, message: Any) -> None:
+        with self._plan_lock:
+            self._latest_gateway_status = message
+            progress = self._plan_progress
+            if progress is None:
+                return
+
+            matches_plan = (
+                str(message.session_id) == progress.session_id
+                and int(message.plan_id) == progress.plan_id
+            )
+            if bool(message.has_active_plan) and matches_plan:
+                progress.seen_active = True
+                return
+            if not progress.seen_active or bool(message.has_active_plan):
+                return
+            if bool(message.armed) or bool(message.shadow):
+                progress.completed = True
+            else:
+                progress.error = (
+                    f"joint gateway stopped plan {progress.session_id}/{progress.plan_id}: "
+                    f"{message.detail}"
+                )
+
+    def ready_for_next_observation(self) -> bool:
+        """Return true only when the gateway can accept a new sequential plan."""
+
+        with self._plan_lock:
+            progress = self._plan_progress
+            if progress is not None:
+                if progress.error is not None:
+                    raise JointRos2RuntimeStateError(progress.error)
+                elapsed = time.monotonic() - progress.published_monotonic
+                if elapsed > float(self.config.action_execution_timeout_s):
+                    raise JointRos2RuntimeStateError(
+                        f"timed out waiting for joint plan {progress.session_id}/"
+                        f"{progress.plan_id} to complete after {elapsed:.1f}s"
+                    )
+                if not progress.ack_received or not progress.completed:
+                    return False
+                self._plan_progress = None
+
+            status = self._latest_gateway_status
+            if status is None:
+                return False
+            if bool(status.has_active_plan):
+                return False
+            return bool(status.armed) or bool(status.shadow)
 
     publish_chunk = publish_action_chunk
 
@@ -399,7 +519,24 @@ class JointRos2Runtime:
         message.timesteps = list(chunk.timesteps)
         # positions is a flattened row-major [K*7] array of absolute joint angles.
         message.positions = [float(value) for value in chunk.positions.reshape(-1)]
-        message.gripper = [float(value) for value in chunk.gripper]
+        gripper, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
+            chunk.gripper,
+            minimum=float(self.config.gripper_command_min_position),
+            maximum=float(self.config.gripper_command_max_position),
+        )
+        node.get_logger().info(
+            "Forwarding continuous FastWAM gripper targets with saturation: count=%d clamped=%d "
+            "raw_range=[%.6f, %.6f] output_range=[%.6f, %.6f]"
+            % (
+                len(gripper),
+                clamped_count,
+                raw_min,
+                raw_max,
+                min(gripper),
+                max(gripper),
+            )
+        )
+        message.gripper = gripper
         return message
 
     def close(self, *, timeout_s: float | None = None) -> None:
@@ -424,6 +561,9 @@ class JointRos2Runtime:
 
         deadline = time.monotonic() + timeout
         try:
+            with self._plan_lock:
+                self._plan_progress = None
+                self._latest_gateway_status = None
             if executor is not None:
                 executor.shutdown(timeout_sec=max(0.0, deadline - time.monotonic()))
             if context is not None:

@@ -23,6 +23,10 @@ from lerobot_robot_franka_ros import (  # noqa: E402
     FrankaJointRos,
     FrankaJointRosConfig,
 )
+from lerobot_robot_franka_ros.joint_ros2_runtime import (  # noqa: E402
+    JointRos2RuntimeStateError,
+    _clamp_continuous_gripper_commands,
+)
 
 
 def _write_fixture(path: Path, **overrides: np.ndarray) -> None:
@@ -212,6 +216,11 @@ def test_non_dry_run_only_allows_isolated_ros2_interface(tmp_path: Path) -> None
         ({"max_observation_age_s": float("nan")}, "finite and greater than zero"),
         ({"action_chunk_validity_s": float("inf")}, "finite and greater than zero"),
         ({"observation_buffer_size": True}, "at least 2"),
+        ({"gripper_command_min_position": float("nan")}, "finite real values"),
+        (
+            {"gripper_command_min_position": 0.8, "gripper_command_max_position": 0.8},
+            "minimum must be less than maximum",
+        ),
     ],
 )
 def test_ros2_config_rejects_non_finite_or_boolean_numeric_values(
@@ -226,3 +235,36 @@ def test_ros2_config_rejects_non_finite_or_boolean_numeric_values(
             dry_run=False,
             **override,
         )
+
+
+def test_gripper_commands_are_forwarded_continuously_without_quantization() -> None:
+    values = [0.0, 0.399, 0.4, 0.782505, 0.8]
+    forwarded, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
+        values,
+        minimum=0.0,
+        maximum=0.8,
+    )
+
+    assert forwarded == values
+    assert raw_min == pytest.approx(0.0)
+    assert raw_max == pytest.approx(0.8)
+    assert clamped_count == 0
+
+
+def test_continuous_gripper_commands_saturate_out_of_range_values() -> None:
+    forwarded, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
+        [-0.006074, 0.000392, 0.9],
+        minimum=0.0,
+        maximum=0.8,
+    )
+
+    assert forwarded == pytest.approx([0.0, 0.000392, 0.8])
+    assert raw_min == pytest.approx(-0.006074)
+    assert raw_max == pytest.approx(0.9)
+    assert clamped_count == 2
+
+
+@pytest.mark.parametrize("values", [[], [float("nan")], [float("inf")]])
+def test_continuous_gripper_commands_reject_empty_or_non_finite_values(values: list[float]) -> None:
+    with pytest.raises(JointRos2RuntimeStateError, match="gripper action"):
+        _clamp_continuous_gripper_commands(values, minimum=0.0, maximum=0.8)

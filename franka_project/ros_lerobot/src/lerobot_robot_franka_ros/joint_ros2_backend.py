@@ -32,6 +32,8 @@ class _Ros2Runtime(Protocol):
 
     def publish_action_chunk(self, chunk: JointActionChunk) -> None: ...
 
+    def ready_for_next_observation(self) -> bool: ...
+
     def close(self, *, timeout_s: float | None = None) -> None: ...
 
 
@@ -142,6 +144,9 @@ class JointRos2Backend:
 
     def get_sideband(self) -> dict[str, Any]:
         return self.get_snapshot().as_sideband()
+
+    def ready_for_next_observation(self) -> bool:
+        return self._require_runtime().ready_for_next_observation()
 
     def send_action(self, action: RobotAction) -> RobotAction:
         """Record local queue progress without creating a second ROS command."""

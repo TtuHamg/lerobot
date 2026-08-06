@@ -1,0 +1,102 @@
+完整通讯：
+client端：
+python tools/start_kml_tunnel_client.py \
+  --listen-port 8081 \
+  --ws-url "wss://kml-dtmachine-27353-prod-1.kmlhb2az1l3-2.corp.kuaishou.com/ws"
+server端：
+python tools/ws_tcp_tunnel.py server --listen-host=0.0.0.0 --listen-port=15645 --target-host=127.0.0.1 --target-port=1
+5174 
+
+server:
+ 
+python scripts/franka_fastwam_async_server.py \
+  --run-config runs/franka/task3_scratch/config.yaml \
+  --checkpoint runs/franka/task3_scratch/checkpoints/weights/step_032000.pt \
+  --stats runs/franka/task3_scratch/dataset_stats.json \
+  --text-cache data/text_embeds_cache/frank3_eef_task3 \
+  --prompt "Pick up the cup." \
+  --cam-keys camera1 camera2 \
+  --action-horizon 32 \
+  --actions-per-chunk 32 \
+  --fps 30 \
+  --num-inference-steps 10 \
+  --port 15174 \
+  --device cuda:0 \
+  --diagnose-n 3 \
+  --dump-images-dir /m2v_intern/genghaotian/FastWAM/franka_fastwam_dump
+  
+ client:
+
+bash /home/pnp/franka/stop_all.sh --keep-haply-manager
+
+shadow验证：
+bash franka_project/scripts/start_joint_stack.sh \
+    --shadow \
+    --no-cam
+
+真机验证：
+bash franka_project/scripts/start_joint_stack.sh --execute --no-cam
+ 
+启动相机：
+ nohup bash /home/pnp/franka/start_cameras.sh \
+    > /home/pnp/franka/logs/joint_validation/cameras_after_stack.log 2>&1 &
+
+
+
+export PROMPT="Pick up the cup."
+  
+python -m lerobot_robot_franka_ros.joint_ros2_client \
+  --robot.type=franka_ros_joint \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.max_observation_age_s=0.5 \
+  --robot.camera2_max_skew_s=0.1 \
+  --robot.qpos_max_skew_s=0.2 \
+  --robot.gripper_max_skew_s=0.1 \
+  --robot.observation_buffer_size=64 \
+  --robot.action_chunk_validity_s=1.0 \
+  --robot.action_execution_timeout_s=120 \
+  --server_address=127.0.0.1:8081 \
+  --policy_type=act \
+  --pretrained_name_or_path=/dummy \
+  --task="$PROMPT" \
+  --actions_per_chunk=32 \
+  --chunk_size_threshold=0.0 \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=120 \
+  --aggregate_fn_name=latest_only \
+  --client_device=cpu \
+  --fps=30
+    
+ 
+ arm:
+ ros2 service call /franka_joint_safety_gateway/set_armed \
+    std_srvs/srv/SetBool '{data: true}'
+    
+ disarm:
+ ros2 service call /franka_joint_safety_gateway/set_armed \
+    std_srvs/srv/SetBool '{data: false}'
+    
+ 监控：
+  ros2 control list_controllers
+
+  ros2 topic info /camera1/camera1/color/image_raw
+  ros2 topic info /camera2/camera2/color/image_raw
+  ros2 topic info /franka/joint_states
+  ros2 topic info /gripper/joint_states
+  
+ 检查拓扑：
+
+  ros2 topic info /lerobot/franka/joint_action_chunk
+  ros2 topic info /franka/safe_joint_command
+  ros2 control list_controllers
+  
+  监控 ACK：
+
+  ros2 topic echo /lerobot/franka/joint_action_chunk_ack
+
+  监控 gateway：
+
+  ros2 topic echo /lerobot/franka/joint_safety_gateway_status
+  
+   

@@ -262,7 +262,7 @@ class AsyncInferenceStub:
         self.SendPolicyInstructions = channel.unary_unary(
                 '/transport.AsyncInference/SendPolicyInstructions',
                 request_serializer=lerobot_dot_transport_dot_services__pb2.PolicySetup.SerializeToString,
-                response_deserializer=lerobot_dot_transport_dot_services__pb2.Empty.FromString,
+                response_deserializer=lerobot_dot_transport_dot_services__pb2.PolicySetupAck.FromString,
                 _registered_method=True)
         self.Ready = channel.unary_unary(
                 '/transport.AsyncInference/Ready',
@@ -329,7 +329,7 @@ def add_AsyncInferenceServicer_to_server(servicer, server):
             'SendPolicyInstructions': grpc.unary_unary_rpc_method_handler(
                     servicer.SendPolicyInstructions,
                     request_deserializer=lerobot_dot_transport_dot_services__pb2.PolicySetup.FromString,
-                    response_serializer=lerobot_dot_transport_dot_services__pb2.Empty.SerializeToString,
+                    response_serializer=lerobot_dot_transport_dot_services__pb2.PolicySetupAck.SerializeToString,
             ),
             'Ready': grpc.unary_unary_rpc_method_handler(
                     servicer.Ready,
@@ -446,7 +446,7 @@ class AsyncInference:
             target,
             '/transport.AsyncInference/SendPolicyInstructions',
             lerobot_dot_transport_dot_services__pb2.PolicySetup.SerializeToString,
-            lerobot_dot_transport_dot_services__pb2.Empty.FromString,
+            lerobot_dot_transport_dot_services__pb2.PolicySetupAck.FromString,
             options,
             channel_credentials,
             insecure,

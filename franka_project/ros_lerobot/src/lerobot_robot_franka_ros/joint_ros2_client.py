@@ -74,6 +74,12 @@ class FrankaJointRos2RobotClient(RobotClient):
                 self.logger.exception("ROS2 action chunk publication failed; stopping client")
                 raise
 
+    def _ready_to_send_observation(self):
+        """Wait for physical ROS execution, not merely local queue depletion."""
+        if not super()._ready_to_send_observation():
+            return False
+        return self.robot._backend.ready_for_next_observation()
+
 
 @draccus.wrap()
 def ros2_joint_async_client(cfg: RobotClientConfig) -> None:

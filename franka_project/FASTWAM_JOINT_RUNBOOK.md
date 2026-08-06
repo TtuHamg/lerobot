@@ -1,5 +1,9 @@
 # FastWAM ↔ Franka 关节空间异步交互 Runbook
 
+> 本文是早期接口说明，端口和执行假设已过期。当前完整、安全运行顺序请阅读
+> [`FASTWAM_FRANKA_JOINT_OPERATIONS_CN.md`](./FASTWAM_FRANKA_JOINT_OPERATIONS_CN.md)。
+> 在 execution ACK/计划完成闭环修复前，禁止按本文旧命令进行真机 ARM。
+
 本文档记录 FastWAM（关节空间策略）通过 lerobot async-inference 框架控制 Franka（FR3，7 关节 + gripper）
 的端到端启动流程。它是 so-arm101 版（`FastWAM/scripts/fastwam_async_server.py` +
 `--robot.type=so101_follower`）的 Franka 关节空间对应版本。
@@ -16,7 +20,7 @@ Franka observation (ROS2: camera1/camera2 + /franka/joint_states + /gripper/join
 ```
 
 关键约束：
-- `--fps=15`（Franka 训练帧率）。
+- `--fps=30`（Franka 训练与控制帧率，必须与数据和 checkpoint 一致）。
 - `--aggregate_fn_name=latest_only`（关节空间完整 chunk 发布语义要求）。
 - `--robot.dry_run=false --robot.ros2_interface_only=true`（非执行 ROS2 接口，不含 controller/IK/actuation）。
 - 图像布局与 so101 相同：RobotWin 384×320（camera1→上 256×320，camera2→左下 128×160，右下黑）。
@@ -58,7 +62,7 @@ python scripts/franka_fastwam_async_server.py \
     --text-cache data/text_embeds_cache/frank3 \
     --prompt     "Stack three paper cups." \
     --port 15173 \
-    --action-horizon 32 --actions-per-chunk 16 --fps 15 \
+    --action-horizon 32 --actions-per-chunk 16 --fps 30 \
     --cam-keys camera1 camera2 \
     --diagnose-n 3
 ```
@@ -109,7 +113,7 @@ python -m lerobot_robot_franka_ros.joint_ros2_client \
     --policy_type=act --pretrained_name_or_path=/dummy \
     --task="Stack three paper cups." \
     --actions_per_chunk=16 --chunk_size_threshold=0.6 \
-    --aggregate_fn_name=latest_only --fps=15
+    --aggregate_fn_name=latest_only --fps=30
 ```
 
 核对动作输出：
@@ -130,7 +134,7 @@ python -m lerobot_robot_franka_ros.joint_ros2_client \
     --robot.action_log_path=/tmp/joint_actions.jsonl \
     --server_address=127.0.0.1:8080 \
     --policy_type=act --pretrained_name_or_path=/dummy \
-    --aggregate_fn_name=latest_only --fps=15
+    --aggregate_fn_name=latest_only --fps=30
 ```
 dry-run fixture 是含 `state`(8, float32) + `camera1`/`camera2`(480,640,3, uint8) 的 npz。
 

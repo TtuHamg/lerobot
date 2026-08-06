@@ -1,0 +1,78 @@
+franka_joint_safety_gateway:
+  ros__parameters:
+    # Shipped fail-closed: validation only, never publishes SafeJointCommand.
+    enabled: false
+    shadow: true
+    preflight_only: false
+
+    schema_version: 1
+    frame_id: base
+    max_waypoints: 32
+    schedule_lateness_s: 0.10
+    state_timeout_s: 0.15
+    # Header stamps lag wall time by ~150 ms on the 1 kHz broadcaster; keep
+    # source age bounded separately from the 150 ms local receive watchdog.
+    state_stamp_timeout_s: 0.50
+    readiness_timeout_s: 0.50
+
+    # Safety preflight follows the same 30 Hz state stream as the policy client;
+    # subscribing the gateway to the 1 kHz broadcaster caused executor starvation.
+    joint_state_topic: /franka/joint_states
+    chunk_topic: /lerobot/franka/joint_action_chunk
+    ack_topic: /lerobot/franka/joint_action_chunk_ack
+    status_topic: /lerobot/franka/joint_safety_gateway_status
+    safe_command_topic: /franka/safe_joint_command
+    safety_feedback_topic: /franka/safety_command_feedback
+    robot_readiness_topic: /franka/robot_ready
+    controller_readiness_topic: /franka/controller_ready
+
+    # FastWAM action[7] is the Robotiq knuckle position: 0.0=open, 0.8=closed.
+    # Real execution requires the action server to be present before ARM.
+    execute_gripper: true
+    gripper_action_name: /gripper/robotiq_gripper_controller/gripper_cmd
+    validate_gripper_range: true
+    gripper_min: 0.0
+    gripper_max: 0.8
+    gripper_max_effort: 16.0
+    # Avoid flooding/preempting the action server from the 200 Hz arm loop.
+    gripper_command_deadband: 0.02
+    gripper_min_command_interval_s: 0.15
+
+    moveit_group: fr3_arm
+    planning_scene_topic: /monitored_planning_scene
+    collision_object_topic: /collision_object
+    planning_scene_world_topic: /planning_scene_world
+    require_environment_scene: true
+    joint_position_margin_rad: 0.03
+    minimum_jacobian_singular_value: 0.02
+    maximum_jacobian_condition: 150.0
+    collision_interpolation_step_rad: 0.03
+
+    # Limits apply to native 30 Hz model waypoints before 200 Hz interpolation.
+    # Match the Cartesian gateway step, velocity, and acceleration profile.
+    # Collision interpolation and the 0.08 rad tracking watchdog remain active.
+    max_joint_step_rad: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
+    max_joint_velocity_rad_s: [0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35]
+    max_joint_acceleration_rad_s2: [3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    # Preserve the model-provided 30 Hz period. A native-period velocity or
+    # acceleration violation is rejected instead of silently slowing the plan.
+    max_retiming_scale: 8.0
+    max_preflight_state_drift_rad: 0.01
+
+    command_period_ms: 5
+    command_deadline_s: 0.100
+    publisher_watchdog_s: 0.100
+    settle_window_s: 0.25
+    applied_feedback_timeout_s: 0.10
+    applied_feedback_grace_s: 0.10
+    max_applied_sequence_lag: 20
+    tracking_grace_s: 0.50
+    max_joint_tracking_error_rad: 0.08
+
+    require_command_subscriber: true
+    # ARM fails if the Cartesian gateway is also present as a command publisher.
+    require_unique_command_publisher: true
+    require_chunk_publisher: true
+    require_robot_readiness: true
+    require_controller_readiness: true
+    hold_after_plan_completion: false

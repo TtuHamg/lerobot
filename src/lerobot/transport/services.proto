@@ -43,7 +43,7 @@ service AsyncInference {
   // Robot acknowledges an action chunk only after it has been committed to
   // the local action queue (and any downstream publisher hook has succeeded).
   rpc AckActions(ActionDeliveryAck) returns (Empty);
-  rpc SendPolicyInstructions(PolicySetup) returns (Empty);
+  rpc SendPolicyInstructions(PolicySetup) returns (PolicySetupAck);
   rpc Ready(Empty) returns (Empty);
 }
 
@@ -98,6 +98,16 @@ message ActionDeliveryAck {
 message PolicySetup {
   // sent by Robot to remote server, to init Policy
   bytes data = 1;
+}
+
+message PolicySetupAck {
+  // The client validates these resolved server values before starting any
+  // observation/action loop. An old server serializes an empty response, which
+  // decodes to zero/default fields and is therefore rejected fail-closed.
+  uint32 protocol_version = 1;
+  uint32 fps = 2;
+  string policy_type = 3;
+  uint32 actions_per_chunk = 4;
 }
 
 message Empty {}

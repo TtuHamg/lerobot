@@ -11,6 +11,7 @@ set(interface_files
   "msg/CartesianActionChunk.msg"
   "msg/CartesianActionChunkAck.msg"
   "msg/JointActionChunk.msg"
+  "msg/JointActionChunkAck.msg"
   "msg/SafetyGatewayStatus.msg"
 )
 

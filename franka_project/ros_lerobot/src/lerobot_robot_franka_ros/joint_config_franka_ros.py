@@ -30,6 +30,8 @@ class FrankaJointRosConfig(RobotConfig):
     ros2_interface_only: bool = True
     ros2_node_name: str = "lerobot_franka_joint_interface"
     action_chunk_topic: str = "/lerobot/franka/joint_action_chunk"
+    action_chunk_ack_topic: str = "/lerobot/franka/joint_action_chunk_ack"
+    safety_gateway_status_topic: str = "/lerobot/franka/joint_safety_gateway_status"
     camera1_topic: str = "/camera1/camera1/color/image_raw"
     camera2_topic: str = "/camera2/camera2/color/image_raw"
     qpos_topic: str = "/franka/joint_states"
@@ -50,7 +52,12 @@ class FrankaJointRosConfig(RobotConfig):
     camera2_max_skew_s: float = 0.05
     qpos_max_skew_s: float = 0.1
     gripper_max_skew_s: float = 0.05
+    # Forward inverse-normalized model gripper targets continuously, saturating
+    # finite out-of-range predictions to this hardware safety envelope.
+    gripper_command_min_position: float = 0.0
+    gripper_command_max_position: float = 0.8
     action_chunk_validity_s: float = 0.5
+    action_execution_timeout_s: float = 30.0
     ros2_shutdown_timeout_s: float = 5.0
 
     def __post_init__(self) -> None:
@@ -65,6 +72,8 @@ class FrankaJointRosConfig(RobotConfig):
 
         topic_fields = {
             "action_chunk_topic": self.action_chunk_topic,
+            "action_chunk_ack_topic": self.action_chunk_ack_topic,
+            "safety_gateway_status_topic": self.safety_gateway_status_topic,
             "camera1_topic": self.camera1_topic,
             "camera2_topic": self.camera2_topic,
             "qpos_topic": self.qpos_topic,
@@ -92,6 +101,19 @@ class FrankaJointRosConfig(RobotConfig):
             raise ValueError("arm_joint_names must not contain empty names")
         if not self.gripper_joint_name:
             raise ValueError("gripper_joint_name must not be empty")
+        gripper_limits = (
+            self.gripper_command_min_position,
+            self.gripper_command_max_position,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(float(value))
+            for value in gripper_limits
+        ):
+            raise ValueError("gripper command limits must be finite real values")
+        if self.gripper_command_min_position >= self.gripper_command_max_position:
+            raise ValueError("gripper command minimum must be less than maximum")
         if (
             isinstance(self.observation_buffer_size, bool)
             or not isinstance(self.observation_buffer_size, Integral)
@@ -106,6 +128,7 @@ class FrankaJointRosConfig(RobotConfig):
             "gripper_max_skew_s": self.gripper_max_skew_s,
             "action_chunk_validity_s": self.action_chunk_validity_s,
             "ros2_shutdown_timeout_s": self.ros2_shutdown_timeout_s,
+            "action_execution_timeout_s": self.action_execution_timeout_s,
         }
         for name, value in positive_durations.items():
             if (
