@@ -28,6 +28,46 @@ _FASTWAM_SENSOR_CONTRACT = {
 }
 
 
+class _InteractiveTaskController:
+    """Thread-safe selected-task and generation state for the keyboard loop."""
+
+    def __init__(self, allowed_tasks: tuple[str, ...]):
+        if not allowed_tasks:
+            raise ValueError("Interactive task control requires a non-empty server task allowlist")
+        self.allowed_tasks = allowed_tasks
+        self._lock = threading.Lock()
+        self._task: str | None = None
+        self._generation = 0
+        self._armed = False
+
+    def select(self, task: str) -> int:
+        if task not in self.allowed_tasks:
+            raise ValueError(f"Task is not server-advertised: {task!r}")
+        with self._lock:
+            self._generation += 1
+            self._task = task
+            self._armed = False
+            return self._generation
+
+    def stop(self) -> int:
+        with self._lock:
+            self._generation += 1
+            self._task = None
+            self._armed = False
+            return self._generation
+
+    def arm(self) -> tuple[str, int]:
+        with self._lock:
+            if self._task is None:
+                raise RuntimeError("Select a task before arming the gateway")
+            self._armed = True
+            return self._task, self._generation
+
+    def snapshot(self) -> tuple[str | None, int, bool]:
+        with self._lock:
+            return self._task, self._generation, self._armed
+
+
 @dataclass
 class FrankaRos2ClientConfig(RobotClientConfig):
     """Client-only options for the chunk-aware Franka ROS2 entry point."""
@@ -104,6 +144,8 @@ def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClien
             f"expected={expected_map}, actual={config.rename_map}"
         )
     if config.policy_type == "fastwam":
+        if config.gateway_arm_timeout_s <= 0.0 or not math.isfinite(config.gateway_arm_timeout_s):
+            raise ValueError("gateway_arm_timeout_s must be finite and positive")
         robot = config.robot
         for field_name, expected_value in _FASTWAM_SENSOR_CONTRACT.items():
             actual_value = getattr(robot, field_name)
@@ -157,8 +199,68 @@ class FrankaRos2RobotClient(RobotClient):
         super().__init__(config)
         if not isinstance(self.robot, FrankaRos):
             raise TypeError("franka_ros plugin did not construct a FrankaRos instance")
+        self._interactive_tasks: _InteractiveTaskController | None = None
+
+    def start(self):
+        if self.config.interactive_task_control:
+            try:
+                self.robot.set_gateway_armed(
+                    False,
+                    timeout_s=self.config.gateway_arm_timeout_s,
+                )
+            except Exception:
+                self.logger.exception("Could not place the gateway in HOLD before policy setup")
+                return False
+        started = super().start()
+        if not started or not self.config.interactive_task_control:
+            return started
+        if self.config.policy_type != "fastwam":
+            self.logger.error("Interactive task control is supported only for policy_type='fastwam'")
+            return False
+        try:
+            self._interactive_tasks = _InteractiveTaskController(self.allowed_tasks)
+            self.logger.info("Interactive client started in HOLD with %d tasks", len(self.allowed_tasks))
+            return True
+        except Exception:
+            self.logger.exception("Could not initialize interactive task control")
+            return False
+
+    def stop(self):
+        controller = self._interactive_tasks
+        if controller is not None and self.robot.is_connected:
+            controller.stop()
+            self.discard_pending_work()
+            try:
+                self.robot.set_gateway_armed(
+                    False,
+                    timeout_s=self.config.gateway_arm_timeout_s,
+                )
+            except Exception:
+                self.logger.exception("Final gateway disarm failed while stopping the client")
+        super().stop()
+
+    def _task_snapshot(self, default_task: str) -> tuple[str, int]:
+        controller = self._interactive_tasks
+        if controller is None:
+            return super()._task_snapshot(default_task)
+        task, generation, armed = controller.snapshot()
+        if task is None or not armed:
+            raise RuntimeError("Interactive task control is in HOLD")
+        return task, generation
+
+    def _accept_action_delivery(self, task: str, task_generation: int) -> bool:
+        controller = self._interactive_tasks
+        if controller is None:
+            return True
+        current_task, current_generation, armed = controller.snapshot()
+        return armed and task == current_task and task_generation == current_generation
 
     def _ready_to_send_observation(self):
+        controller = self._interactive_tasks
+        if controller is not None:
+            task, _, armed = controller.snapshot()
+            if task is None or not armed:
+                return False
         if self.config.observation_trigger_mode == "post_action_delay":
             # The base class retains the pending-observation protection and
             # checks only the post-publication monotonic deadline in this mode.
@@ -169,11 +271,74 @@ class FrankaRos2RobotClient(RobotClient):
         # bookkeeping and the queue-threshold decision on the nominal clock.
         if not super()._ready_to_send_observation():
             return False
-        # Gate the next observation on the gateway's real execution progress.
-        # When retiming slows execution below real time, the nominal clock
-        # otherwise requests a replacement chunk mid-plan and every
-        # replacement starts with a catch-up jump.
         return self.robot.plan_execution_complete()
+
+    def select_task(self, task: str) -> int:
+        controller = self._interactive_tasks
+        if controller is None:
+            raise RuntimeError("Interactive task control is not enabled")
+        generation = controller.select(task)
+        self.discard_pending_work()
+        self.robot.set_gateway_armed(False, timeout_s=self.config.gateway_arm_timeout_s)
+        self.logger.info("Selected task %r at generation %d; gateway remains in HOLD", task, generation)
+        return generation
+
+    def stop_task(self) -> int:
+        controller = self._interactive_tasks
+        if controller is None:
+            raise RuntimeError("Interactive task control is not enabled")
+        generation = controller.stop()
+        self.discard_pending_work()
+        self.robot.set_gateway_armed(False, timeout_s=self.config.gateway_arm_timeout_s)
+        self.logger.info("Stopped task at generation %d; gateway is in HOLD", generation)
+        return generation
+
+    def arm_selected_task(self) -> tuple[str, int]:
+        controller = self._interactive_tasks
+        if controller is None:
+            raise RuntimeError("Interactive task control is not enabled")
+        task, generation, _ = controller.snapshot()
+        if task is None:
+            raise RuntimeError("Select a task before arming the gateway")
+        self.robot.set_gateway_armed(True, timeout_s=self.config.gateway_arm_timeout_s)
+        result = controller.arm()
+        self.must_go.set()
+        self.logger.info("Armed task %r at generation %d", *result)
+        return result
+
+    def keyboard_task_loop(self) -> None:
+        controller = self._interactive_tasks
+        if controller is None:
+            return
+        tasks = controller.allowed_tasks
+        self.logger.info("Task keys: %s | s=stop a=arm h=help q=quit", " ".join(
+            f"{index + 1}={task!r}" for index, task in enumerate(tasks)
+        ))
+        while self.running:
+            try:
+                command = input("task> ").strip().lower()
+                if command.isdigit() and 1 <= int(command) <= len(tasks):
+                    self.select_task(tasks[int(command) - 1])
+                elif command == "s":
+                    self.stop_task()
+                elif command == "a":
+                    self.arm_selected_task()
+                elif command == "h":
+                    self.logger.info("Task keys: %s | s=stop a=arm h=help q=quit", " ".join(
+                        f"{index + 1}={task!r}" for index, task in enumerate(tasks)
+                    ))
+                elif command == "q":
+                    self.stop_task()
+                    self.shutdown_event.set()
+                    return
+                elif command:
+                    self.logger.warning("Unknown task command: %r", command)
+            except EOFError:
+                self.stop_task()
+                self.shutdown_event.set()
+                return
+            except Exception:
+                self.logger.exception("Interactive task command failed")
 
     def _effective_action_chunk_size(self, incoming_actions: list[TimedAction]) -> int:
         received_size = super()._effective_action_chunk_size(incoming_actions)
@@ -241,6 +406,7 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
 
     visualization_launcher: ActionVisualizationLauncher | None = None
     action_receiver_thread: threading.Thread | None = None
+    keyboard_thread: threading.Thread | None = None
     try:
         if cfg.visualize_action:
             visualization_launcher = _make_action_visualization_launcher(
@@ -256,6 +422,14 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
             daemon=True,
         )
         action_receiver_thread.start()
+
+        if cfg.interactive_task_control:
+            keyboard_thread = threading.Thread(
+                target=client.keyboard_task_loop,
+                name="franka-task-keyboard",
+                daemon=True,
+            )
+            keyboard_thread.start()
         client.control_loop(task=cfg.task)
     finally:
         try:
@@ -270,6 +444,8 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
             finally:
                 if action_receiver_thread is not None:
                     action_receiver_thread.join()
+                if keyboard_thread is not None:
+                    keyboard_thread.join(timeout=1.0)
         if cfg.debug_visualize_queue_size:
             visualize_action_queue_size(client.action_queue_size)
         client.logger.info("Franka ROS2 interface client stopped")

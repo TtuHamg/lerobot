@@ -240,6 +240,9 @@ class TimedObservation(TimedData):
     # Stable logical request identifier used to recover an action chunk when
     # the transport disconnects after inference but before client delivery.
     request_id: str | None = None
+    # Monotonically increasing client-side task epoch. It separates chunks
+    # produced before and after an interactive stop/reassignment.
+    task_generation: int = 0
 
     def get_observation(self):
         return self.observation

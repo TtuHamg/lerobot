@@ -189,6 +189,7 @@ tests/
 !franka_project/tests/
 franka_project/tests/*
 !franka_project/tests/test_export_fastwam_async_fixture.py
+!franka_project/tests/test_fastwam_multitask_async.py
 !franka_project/tests/test_record_franka_topics.py
 !franka_project/tests/test_franka_visualization_launcher.py
 logs/

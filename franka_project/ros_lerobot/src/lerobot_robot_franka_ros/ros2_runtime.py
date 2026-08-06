@@ -39,6 +39,7 @@ _SCHEMA_VERSION = 1
 # The gateway publishes these under fixed names (see gateway_node.cpp).
 _GATEWAY_ACK_TOPIC = "/lerobot/franka/action_chunk_ack"
 _GATEWAY_STATUS_TOPIC = "/lerobot/franka/safety_gateway_status"
+_GATEWAY_ARM_SERVICE = "/franka_cartesian_safety_gateway/set_armed"
 _MAX_TRACKED_ACKS = 8
 
 
@@ -67,6 +68,7 @@ class _RosBindings:
     action_chunk_type: type
     action_chunk_ack_type: type
     gateway_status_type: type
+    set_bool_type: type | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +107,7 @@ def _load_ros_bindings() -> _RosBindings:
             ReliabilityPolicy,
         )
         from sensor_msgs.msg import Image, JointState
+        from std_srvs.srv import SetBool
     except (ImportError, ModuleNotFoundError) as error:
         raise Ros2RuntimeUnavailableError(
             "ROS 2 Python bindings or lerobot_franka_interfaces are unavailable. "
@@ -128,6 +131,7 @@ def _load_ros_bindings() -> _RosBindings:
         action_chunk_type=CartesianActionChunk,
         action_chunk_ack_type=CartesianActionChunkAck,
         gateway_status_type=SafetyGatewayStatus,
+        set_bool_type=SetBool,
     )
 
 
@@ -172,6 +176,7 @@ class Ros2Runtime:
         self._executor: Any | None = None
         self._thread: threading.Thread | None = None
         self._publisher: Any | None = None
+        self._gateway_arm_client: Any | None = None
         self._subscriptions: list[Any] = []
         self._bindings: _RosBindings | None = None
         self._closing = False
@@ -286,6 +291,10 @@ class Ros2Runtime:
                     self.config.action_chunk_topic,
                     action_qos,
                 )
+                gateway_arm_client = node.create_client(
+                    bindings.set_bool_type,
+                    _GATEWAY_ARM_SERVICE,
+                )
                 executor.add_node(node)
 
                 self._bindings = bindings
@@ -293,6 +302,7 @@ class Ros2Runtime:
                 self._node = node
                 self._executor = executor
                 self._publisher = publisher
+                self._gateway_arm_client = gateway_arm_client
                 self._subscriptions = subscriptions
                 self._closing = False
                 self._spin_error = None
@@ -495,6 +505,41 @@ class Ros2Runtime:
 
     publish_chunk = publish_action_chunk
 
+    def set_gateway_armed(self, armed: bool, *, timeout_s: float) -> tuple[bool, str]:
+        """Call the existing external gateway service; this runtime owns no controller."""
+
+        timeout = float(timeout_s)
+        if not math.isfinite(timeout) or timeout <= 0.0:
+            raise ValueError("gateway arm timeout must be finite and positive")
+        with self._lifecycle_lock:
+            client = self._gateway_arm_client
+            bindings = self._bindings
+            if (
+                not self.is_running
+                or client is None
+                or bindings is None
+                or bindings.set_bool_type is None
+            ):
+                raise Ros2RuntimeStateError("ROS2 runtime is not running")
+        if not client.wait_for_service(timeout_sec=timeout):
+            raise Ros2RuntimeStateError(
+                f"Gateway arm service unavailable: {_GATEWAY_ARM_SERVICE}"
+            )
+        request = bindings.set_bool_type.Request()
+        request.data = bool(armed)
+        future = client.call_async(request)
+        deadline = time.monotonic() + timeout
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if not future.done():
+            raise Ros2RuntimeStateError(
+                f"Gateway arm service timed out after {timeout:.3f}s"
+            )
+        response = future.result()
+        if response is None:
+            raise Ros2RuntimeStateError("Gateway arm service returned no response")
+        return bool(response.success), str(response.message)
+
     def _action_chunk_message(self, chunk: AbsoluteActionChunk) -> Any:
         bindings = self._bindings
         node = self._node
@@ -599,6 +644,7 @@ class Ros2Runtime:
 
     def _clear_lifecycle_state(self) -> None:
         self._publisher = None
+        self._gateway_arm_client = None
         self._subscriptions = []
         self._executor = None
         self._node = None

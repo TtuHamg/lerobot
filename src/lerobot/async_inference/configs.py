@@ -185,6 +185,14 @@ class RobotClientConfig:
 
     # Task instruction for the robot to execute (e.g., 'fold my tshirt')
     task: str = field(default="", metadata={"help": "Task instruction for the robot to execute"})
+    interactive_task_control: bool = field(
+        default=False,
+        metadata={"help": "Select, stop, and reassign server-advertised tasks from the keyboard"},
+    )
+    gateway_arm_timeout_s: float = field(
+        default=5.0,
+        metadata={"help": "Timeout for the external Franka safety gateway set_armed service"},
+    )
 
     # Network configuration
     server_address: str = field(default="localhost:8080", metadata={"help": "Server address to connect to"})
@@ -291,6 +299,10 @@ class RobotClientConfig:
             raise ValueError(
                 f"pending_observation_timeout_s must be positive, got {self.pending_observation_timeout_s}"
             )
+        if self.gateway_arm_timeout_s <= 0:
+            raise ValueError(
+                f"gateway_arm_timeout_s must be positive, got {self.gateway_arm_timeout_s}"
+            )
 
         if self.observation_trigger_mode not in OBSERVATION_TRIGGER_MODES:
             raise ValueError(
@@ -346,6 +358,8 @@ class RobotClientConfig:
             "fps": self.fps,
             "actions_per_chunk": self.actions_per_chunk,
             "task": self.task,
+            "interactive_task_control": self.interactive_task_control,
+            "gateway_arm_timeout_s": self.gateway_arm_timeout_s,
             "debug_visualize_queue_size": self.debug_visualize_queue_size,
             "aggregate_fn_name": self.aggregate_fn_name,
             "rename_map": self.rename_map,

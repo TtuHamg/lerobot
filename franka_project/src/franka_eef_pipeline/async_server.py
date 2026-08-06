@@ -231,6 +231,8 @@ class FrankaFastWAMCheckpointContract:
     seed: int
     finger_scale: float
     finger_signs: tuple[float, float]
+    text_context_paths: Mapping[str, Path] | None = None
+    task_instructions: tuple[str, ...] | None = None
 
 
 FrankaServingContract = FrankaCheckpointContract | FrankaFastWAMCheckpointContract
@@ -274,8 +276,10 @@ class _FastWAMMinMaxNormalizer:
 class _FastWAMRuntime:
     model: Any
     normalizer: _FastWAMMinMaxNormalizer
-    context: torch.Tensor
-    context_mask: torch.Tensor
+    contexts_by_task: Mapping[str, tuple[torch.Tensor, torch.Tensor]] | None = None
+    # Compatibility fields for single-task fixtures and downstream users.
+    context: torch.Tensor | None = None
+    context_mask: torch.Tensor | None = None
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -883,6 +887,68 @@ def _infer_fastwam_source_checkout(run_dir: Path) -> Path:
     )
 
 
+def _resolve_fastwam_task_instructions(
+    dataset_contract: Mapping[str, Any],
+    *,
+    contract_path: Path,
+) -> tuple[str, ...]:
+    """Resolve the checkpoint's task allowlist from its frozen source manifest."""
+
+    task_contract = _mapping(dataset_contract.get("task"), name="FastWAM task contract")
+    source = _mapping(dataset_contract.get("source"), name="FastWAM source contract")
+    manifest_path = _configured_path(
+        source.get("manifest"),
+        config_path=contract_path,
+        name="FastWAM source.manifest",
+    )
+    selected_ids_value = source.get("episode_ids")
+    selected_ids = (
+        {str(value) for value in selected_ids_value}
+        if isinstance(selected_ids_value, list)
+        else None
+    )
+    tasks: list[str] = []
+    if manifest_path.is_file():
+        manifest = _read_yaml_object(manifest_path)
+        episodes = manifest.get("episodes")
+        if not isinstance(episodes, list):
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM source manifest has no episode list: {manifest_path}"
+            )
+        matched_selected_ids: set[str] = set()
+        for episode in episodes:
+            if not isinstance(episode, Mapping):
+                continue
+            episode_id = str(episode.get("episode_id"))
+            if selected_ids is not None and episode_id not in selected_ids:
+                continue
+            matched_selected_ids.add(episode_id)
+            task = episode.get("task_instruction")
+            if not isinstance(task, str) or not task.strip():
+                raise FrankaAsyncPolicyContractError(
+                    f"FastWAM selected episode {episode_id!r} has no task_instruction"
+                )
+            if task not in tasks:
+                tasks.append(task)
+        if selected_ids is not None and matched_selected_ids != selected_ids:
+            missing_ids = sorted(selected_ids - matched_selected_ids)
+            raise FrankaAsyncPolicyContractError(
+                "FastWAM source manifest is missing selected checkpoint episodes: "
+                f"count={len(missing_ids)}, first={missing_ids[:3]}"
+            )
+
+    default_task = task_contract.get("default_instruction")
+    if not tasks and isinstance(default_task, str) and default_task.strip():
+        tasks.append(default_task)
+    invalid = [task for task in tasks if task.startswith("__MISSING_")]
+    if not tasks or invalid:
+        raise FrankaAsyncPolicyContractError(
+            "FastWAM checkpoint has no deployable task instructions; "
+            f"manifest={manifest_path}, invalid={invalid}"
+        )
+    return tuple(tasks)
+
+
 def inspect_fastwam_checkpoint_contract(
     pretrained_path: str | Path,
     *,
@@ -933,8 +999,6 @@ def inspect_fastwam_checkpoint_contract(
     )
     temporal = _mapping(dataset_contract.get("temporal"), name="FastWAM temporal contract")
     image_contract = _mapping(dataset_contract.get("images"), name="FastWAM image contract")
-    task_contract = _mapping(dataset_contract.get("task"), name="FastWAM task contract")
-
     if state_contract.get("dim") != FASTWAM_STATE_DIM:
         raise FrankaAsyncPolicyContractError("FastWAM state contract must be 8D")
     if state_contract.get("type") != "eef_absolute_axis_angle_with_pseudo_fingers":
@@ -1011,8 +1075,9 @@ def inspect_fastwam_checkpoint_contract(
         raise FrankaAsyncPolicyContractError(
             f"FastWAM camera order mismatch: expected={expected_cameras}, actual={actual_cameras}"
         )
-    task_instruction = _nonempty_string(
-        task_contract.get("default_instruction"), name="FastWAM task.default_instruction"
+    task_instructions = _resolve_fastwam_task_instructions(
+        dataset_contract,
+        contract_path=contract_path,
     )
 
     data = _mapping(runtime.get("data"), name="FastWAM runtime.data")
@@ -1122,23 +1187,27 @@ def inspect_fastwam_checkpoint_contract(
         config_path=runtime_path,
         name="FastWAM text_embedding_cache_dir",
     )
-    prompt = FASTWAM_PROMPT_TEMPLATE.format(task=task_instruction)
-    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     encoder_id = re.sub(r"[^a-z0-9]+", "", model_id.split("/")[-1].lower()) or "textenc"
-    text_context_path = text_cache_dir / f"{prompt_hash}.t5_len{context_len}.{encoder_id}.pt"
-    if not text_context_path.is_file():
-        raise FrankaAsyncPolicyContractError(
-            f"FastWAM cached text context is missing for task {task_instruction!r}: {text_context_path}"
-        )
+    text_context_paths: dict[str, Path] = {}
+    for task_instruction in task_instructions:
+        prompt = FASTWAM_PROMPT_TEMPLATE.format(task=task_instruction)
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        text_context_path = text_cache_dir / f"{prompt_hash}.t5_len{context_len}.{encoder_id}.pt"
+        if not text_context_path.is_file():
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM cached text context is missing for task {task_instruction!r}: "
+                f"{text_context_path}"
+            )
+        text_context_paths[task_instruction] = text_context_path
 
     return FrankaFastWAMCheckpointContract(
         checkpoint_path=checkpoint,
         run_dir=run_dir,
         runtime_config_path=runtime_path,
         stats_path=configured_stats_path,
-        text_context_path=text_context_path,
+        text_context_path=text_context_paths[task_instructions[0]],
         vae_path=vae_path,
-        task_instruction=task_instruction,
+        task_instruction=task_instructions[0],
         observation_fps=observation_fps,
         action_fps=action_fps,
         chunk_size=chunk_size,
@@ -1157,6 +1226,8 @@ def inspect_fastwam_checkpoint_contract(
         seed=seed,
         finger_scale=finger_scale,
         finger_signs=finger_signs,
+        text_context_paths=text_context_paths,
+        task_instructions=task_instructions,
     )
 
 
@@ -1568,17 +1639,19 @@ def _decode_fastwam_absolute_action_chunk(
 
 
 def _load_fastwam_text_context(
-    contract: FrankaFastWAMCheckpointContract,
+    path: Path,
+    *,
+    context_len: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     try:
         payload = torch.load(
-            contract.text_context_path,
+            path,
             map_location="cpu",
             weights_only=True,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise FrankaAsyncPolicyContractError(
-            f"Could not load FastWAM cached text context: {contract.text_context_path}"
+            f"Could not load FastWAM cached text context: {path}"
         ) from exc
     if not isinstance(payload, Mapping):
         raise FrankaAsyncPolicyContractError("FastWAM text context payload must be a mapping")
@@ -1594,14 +1667,14 @@ def _load_fastwam_text_context(
         )
     context = context_value.detach().clone().to(device="cpu")
     source_mask = mask_value.detach().clone().to(device="cpu")
-    expected_context_shape = (contract.context_len, FASTWAM_CONTEXT_WIDTH)
+    expected_context_shape = (context_len, FASTWAM_CONTEXT_WIDTH)
     if tuple(context.shape) != expected_context_shape or not bool(torch.isfinite(context.float()).all()):
         raise FrankaAsyncPolicyContractError(
             f"FastWAM context must be finite shape {expected_context_shape}, got {tuple(context.shape)}"
         )
-    if tuple(source_mask.shape) != (contract.context_len,):
+    if tuple(source_mask.shape) != (context_len,):
         raise FrankaAsyncPolicyContractError(
-            f"FastWAM context mask must have shape ({contract.context_len},), "
+            f"FastWAM context mask must have shape ({context_len},), "
             f"got {tuple(source_mask.shape)}"
         )
     # RobotVideoDataset zeroed padding tokens but then exposed an all-true mask
@@ -1662,7 +1735,13 @@ def _load_fastwam_runtime(
         raise FrankaAsyncPolicyContractError("FastWAM serving requires an available CUDA device")
 
     normalizer = _load_fastwam_minmax_normalizer(contract.stats_path)
-    context, context_mask = _load_fastwam_text_context(contract)
+    contexts_by_task = {
+        task: _load_fastwam_text_context(path, context_len=contract.context_len)
+        for task, path in (
+            contract.text_context_paths
+            or {contract.task_instruction: contract.text_context_path}
+        ).items()
+    }
     try:
         runtime_config = OmegaConf.load(contract.runtime_config_path)
         model_config = OmegaConf.create(OmegaConf.to_container(runtime_config.model, resolve=True))
@@ -1718,8 +1797,7 @@ def _load_fastwam_runtime(
     return _FastWAMRuntime(
         model=model,
         normalizer=normalizer,
-        context=context,
-        context_mask=context_mask,
+        contexts_by_task=contexts_by_task,
     )
 
 
@@ -2077,6 +2155,15 @@ class FrankaFastWAMPolicyServer(PolicyServer):
         )
         return policy_specs
 
+    def _make_policy_setup_ack(self, policy_specs: RemotePolicyConfig):
+        ack = super()._make_policy_setup_ack(policy_specs)
+        if self._checkpoint_contract is not None:
+            ack.allowed_tasks.extend(
+                self._checkpoint_contract.task_instructions
+                or (self._checkpoint_contract.task_instruction,)
+            )
+        return ack
+
     def _load_policy(self, policy_type: str, pretrained_name_or_path: str) -> Any:
         if policy_type != "fastwam":
             raise FrankaAsyncPolicyContractError(
@@ -2096,10 +2183,10 @@ class FrankaFastWAMPolicyServer(PolicyServer):
         self._fastwam_runtime = runtime
         self.logger.info(
             "Loaded Franka FastWAM checkpoint from %s | "
-            "task=%r fps=%s chunk_size=%s action_label_mode=%s "
+            "tasks=%r fps=%s chunk_size=%s action_label_mode=%s "
             "video_frames=%s video_fps=%s step=%s",
             contract.checkpoint_path,
-            contract.task_instruction,
+            contract.task_instructions or (contract.task_instruction,),
             contract.observation_fps,
             contract.chunk_size,
             contract.action_label_mode,
@@ -2155,7 +2242,7 @@ class FrankaFastWAMPolicyServer(PolicyServer):
     def _reconstruct_fastwam_observation(
         self,
         observation_t: TimedObservation,
-    ) -> tuple[np.ndarray, np.ndarray, torch.Tensor]:
+    ) -> tuple[str, np.ndarray, np.ndarray, torch.Tensor]:
         if self.lerobot_features is None:
             raise FrankaAsyncPolicyContractError("LeRobot observation features are unset")
         contract = self._checkpoint_contract
@@ -2163,10 +2250,11 @@ class FrankaFastWAMPolicyServer(PolicyServer):
             raise FrankaAsyncPolicyContractError("FastWAM checkpoint contract is unset")
         raw_observation = observation_t.get_observation()
         task = raw_observation.get("task")
-        if not isinstance(task, str) or task != contract.task_instruction:
+        task_instructions = contract.task_instructions or (contract.task_instruction,)
+        if not isinstance(task, str) or task not in task_instructions:
             raise FrankaAsyncPolicyContractError(
-                "Franka observation task does not match the FastWAM checkpoint: "
-                f"expected={contract.task_instruction!r}, actual={task!r}"
+                "Franka observation task is not in the FastWAM checkpoint allowlist: "
+                f"allowed={task_instructions!r}, actual={task!r}"
             )
         try:
             observation = make_lerobot_observation(raw_observation, self.lerobot_features)
@@ -2188,7 +2276,7 @@ class FrankaFastWAMPolicyServer(PolicyServer):
             target_height=contract.image_height,
             target_width=contract.image_width,
         )
-        return state, fastwam_state, input_image
+        return task, state, fastwam_state, input_image
 
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         runtime = self._fastwam_runtime
@@ -2200,7 +2288,22 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                 "FastWAM runtime chunk size drift: "
                 f"server={self.actions_per_chunk}, checkpoint={contract.chunk_size}"
             )
-        anchor_state, fastwam_state, input_image = self._reconstruct_fastwam_observation(observation_t)
+        task, anchor_state, fastwam_state, input_image = self._reconstruct_fastwam_observation(
+            observation_t
+        )
+        if runtime.contexts_by_task is None:
+            context, context_mask = runtime.context, runtime.context_mask
+        else:
+            try:
+                context, context_mask = runtime.contexts_by_task[task]
+            except KeyError as exc:
+                raise FrankaAsyncPolicyContractError(
+                    f"FastWAM text context was not preloaded for task {task!r}"
+                ) from exc
+        if context is None or context_mask is None:
+            raise FrankaAsyncPolicyContractError(
+                f"FastWAM text context was not preloaded for task {task!r}"
+            )
         normalized_state = runtime.normalizer.normalize_state(
             torch.from_numpy(fastwam_state).to(dtype=torch.float32)
         )
@@ -2218,8 +2321,8 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                     action_horizon=contract.chunk_size,
                     action=None,
                     proprio=normalized_state,
-                    context=runtime.context,
-                    context_mask=runtime.context_mask,
+                    context=context,
+                    context_mask=context_mask,
                     text_cfg_scale=1.0,
                     num_inference_steps=contract.num_inference_steps,
                     sigma_shift=None,
@@ -2261,8 +2364,8 @@ class FrankaFastWAMPolicyServer(PolicyServer):
                     "input_image": input_image,
                     "action_horizon": contract.chunk_size,
                     "proprio": normalized_state,
-                    "context": runtime.context,
-                    "context_mask": runtime.context_mask,
+                    "context": context,
+                    "context_mask": context_mask,
                     "text_cfg_scale": 1.0,
                     "num_inference_steps": contract.num_inference_steps,
                     "sigma_shift": None,

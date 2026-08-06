@@ -32,6 +32,8 @@ class _Ros2Runtime(Protocol):
 
     def publish_action_chunk(self, chunk: AbsoluteActionChunk) -> None: ...
 
+    def set_gateway_armed(self, armed: bool, *, timeout_s: float) -> tuple[bool, str]: ...
+
     def get_plan_execution_state(
         self, session_id: str, plan_id: int, *, status_freshness_ns: int
     ) -> Any: ...
@@ -311,6 +313,16 @@ class Ros2Backend:
         # retiming scale (8), plus settle margin. Beyond this something is
         # wedged and the observation stream must not deadlock.
         return elapsed_ns > 8 * waypoint_count * period_ns + 2 * _NS_PER_SECOND
+
+    def set_gateway_armed(self, armed: bool, *, timeout_s: float) -> tuple[bool, str]:
+        runtime = self._require_runtime()
+        success, message = runtime.set_gateway_armed(armed, timeout_s=timeout_s)
+        if not success:
+            raise Ros2BackendError(f"Gateway rejected armed={armed}: {message}")
+        if not armed:
+            with self._lock:
+                self._last_published_plan = None
+        return success, message
 
     def disconnect(self) -> None:
         with self._lock:

@@ -79,6 +79,7 @@ class _PendingActionDelivery:
     request_id: str
     chunk_id: str
     source_timestep: int
+    task_generation: int
     response: Any
 
 
@@ -105,7 +106,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self._inflight_request_ids: set[str] = set()
         self._generated_timesteps: set[int] = set()
         self._pending_delivery: _PendingActionDelivery | None = None
-        self._delivered_chunks: OrderedDict[str, tuple[str, int]] = OrderedDict()
+        self._delivered_chunks: OrderedDict[str, tuple[str, int, int]] = OrderedDict()
 
         self.last_processed_obs = None
 
@@ -126,6 +127,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self._get_actions_lock = threading.Lock()
         self._enqueue_observation_lock = threading.Lock()
         self._session_generation = 0
+        self._active_task_generation = 0
 
     @property
     def running(self):
@@ -252,6 +254,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             self._pending_delivery = None
             self._delivered_chunks = OrderedDict()
             self.last_processed_obs = None
+            self._active_task_generation = 0
 
     def Ready(self, request, context):  # noqa: N802
         client_id = context.peer()
@@ -407,6 +410,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         request_id = str(request.request_id)
         chunk_id = str(request.chunk_id)
         source_timestep = int(request.source_timestep)
+        task_generation = int(request.task_generation)
         if not request_id or not chunk_id:
             self.logger.warning("Ignoring action delivery ACK with an empty request_id/chunk_id")
             return services_pb2.Empty()
@@ -417,11 +421,12 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                 pending.request_id == request_id
                 and pending.chunk_id == chunk_id
                 and pending.source_timestep == source_timestep
+                and pending.task_generation == task_generation
             ):
                 self._pending_delivery = None
                 self._generated_timesteps.discard(source_timestep)
                 self._predicted_timesteps.add(source_timestep)
-                self._delivered_chunks[chunk_id] = (request_id, source_timestep)
+                self._delivered_chunks[chunk_id] = (request_id, source_timestep, task_generation)
                 self._delivered_chunks.move_to_end(chunk_id)
                 while len(self._delivered_chunks) > _MAX_DELIVERY_TOMBSTONES:
                     self._delivered_chunks.popitem(last=False)
@@ -433,7 +438,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                 return services_pb2.Empty()
 
             delivered = self._delivered_chunks.get(chunk_id)
-            if delivered == (request_id, source_timestep):
+            if delivered == (request_id, source_timestep, task_generation):
                 self.logger.debug("Duplicate ACK for committed action chunk %s", chunk_id)
                 return services_pb2.Empty()
 
@@ -474,12 +479,14 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         obs = None
         request_id = None
         source_timestep = None
+        task_generation = 0
         legacy_prediction_marked = False
         try:
             getactions_starts = time.perf_counter()
             obs = self.observation_queue.get(timeout=self.config.obs_queue_timeout)
             request_id = self._observation_request_id(obs)
             source_timestep = int(obs.get_timestep())
+            task_generation = int(getattr(obs, "task_generation", 0))
 
             with self._predicted_timesteps_lock:
                 self._queued_timesteps.discard(source_timestep)
@@ -501,6 +508,18 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             action_chunk = self._predict_action_chunk(obs)
             inference_time = time.perf_counter() - start_time
 
+            with self._predicted_timesteps_lock:
+                if task_generation != self._active_task_generation:
+                    self.logger.info(
+                        "Discarding action chunk from stale task generation %s (current=%s)",
+                        task_generation,
+                        self._active_task_generation,
+                    )
+                    self._inflight_timesteps.discard(source_timestep)
+                    if request_id is not None:
+                        self._inflight_request_ids.discard(request_id)
+                    return services_pb2.Empty()
+
             start_time = time.perf_counter()
             server_send_timestamp = time.time()
             for timed_action in action_chunk:
@@ -519,6 +538,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                     request_id=request_id,
                     chunk_id=chunk_id,
                     source_timestep=source_timestep,
+                    task_generation=task_generation,
+                    task=str(obs.get_observation().get("task", "")),
                 )
                 with self._predicted_timesteps_lock:
                     self._inflight_timesteps.discard(source_timestep)
@@ -528,6 +549,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                         request_id=request_id,
                         chunk_id=chunk_id,
                         source_timestep=source_timestep,
+                        task_generation=task_generation,
                         response=actions,
                     )
 
@@ -625,7 +647,35 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         request_id = self._observation_request_id(obs)
         timestep = int(obs.get_timestep())
+        task_generation = int(getattr(obs, "task_generation", 0))
+        if task_generation < 0:
+            raise ValueError("TimedObservation.task_generation must be non-negative")
         with self._predicted_timesteps_lock:
+            if task_generation < self._active_task_generation:
+                self.logger.info(
+                    "Dropping observation #%s from stale task generation %s (current=%s)",
+                    timestep,
+                    task_generation,
+                    self._active_task_generation,
+                )
+                return False
+            if task_generation > self._active_task_generation:
+                self.logger.info(
+                    "Activating task generation %s (previous=%s) without reloading the policy",
+                    task_generation,
+                    self._active_task_generation,
+                )
+                self.observation_queue = Queue(maxsize=1)
+                self._predicted_timesteps.clear()
+                self._queued_timesteps.clear()
+                self._queued_request_ids.clear()
+                self._inflight_timesteps.clear()
+                self._inflight_request_ids.clear()
+                self._generated_timesteps.clear()
+                self._pending_delivery = None
+                self._delivered_chunks.clear()
+                self.last_processed_obs = None
+                self._active_task_generation = task_generation
             request_already_seen = request_id is not None and (
                 request_id in self._queued_request_ids
                 or request_id in self._inflight_request_ids

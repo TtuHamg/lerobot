@@ -139,6 +139,7 @@ class RobotClient:
         self._next_observation_sequence = 0
         self._committed_action_chunks_lock = threading.Lock()
         self._committed_action_chunks: OrderedDict[str, None] = OrderedDict()
+        self.allowed_tasks: tuple[str, ...] = ()
 
         self.action_queue = Queue()
         self.action_queue_lock = threading.Lock()  # Protect queue operations
@@ -181,6 +182,7 @@ class RobotClient:
 
             setup_ack = self.stub.SendPolicyInstructions(policy_setup)
             self._validate_policy_setup_ack(setup_ack)
+            self.allowed_tasks = tuple(setup_ack.allowed_tasks)
 
             self.shutdown_event.clear()
 
@@ -228,6 +230,11 @@ class RobotClient:
                 "Policy setup acknowledgement mismatch; synchronize client/server checkouts: "
                 + "; ".join(mismatches)
             )
+        allowed_tasks = tuple(ack.allowed_tasks)
+        if any(not task or not task.strip() for task in allowed_tasks):
+            raise RuntimeError("Policy setup acknowledgement contains an empty allowed task")
+        if len(set(allowed_tasks)) != len(allowed_tasks):
+            raise RuntimeError("Policy setup acknowledgement contains duplicate allowed tasks")
 
     def stop(self):
         """Stop the robot client"""
@@ -255,7 +262,7 @@ class RobotClient:
             with self._pending_observation_lock:
                 sequence = self._next_observation_sequence
                 self._next_observation_sequence += 1
-            obs.request_id = f"{self._client_session_id}:{sequence}"
+            obs.request_id = f"{self._client_session_id}:{obs.task_generation}:{sequence}"
         elif not isinstance(obs.request_id, str) or not obs.request_id:
             raise ValueError("TimedObservation.request_id must be a non-empty string")
 
@@ -370,6 +377,7 @@ class RobotClient:
                 request_id=request_id,
                 chunk_id=chunk_id,
                 source_timestep=int(actions_chunk.source_timestep),
+                task_generation=int(actions_chunk.task_generation),
             ),
             timeout=self.config.pending_observation_timeout_s,
         )
@@ -496,6 +504,18 @@ class RobotClient:
                     raise ValueError(
                         "Action delivery source_timestep does not match its first TimedAction"
                     )
+                task_generation = int(getattr(actions_chunk, "task_generation", 0))
+                task = str(getattr(actions_chunk, "task", ""))
+                if not self._accept_action_delivery(task, task_generation):
+                    self.logger.info(
+                        "Discarding stale action delivery for task=%r generation=%s",
+                        task,
+                        task_generation,
+                    )
+                    self._remember_committed_action_chunk(chunk_id)
+                    self._resolve_pending_observation(request_id)
+                    self._ack_action_delivery(actions_chunk)
+                    continue
 
                 server_send_timestamp = (
                     getattr(timed_actions[0], "server_send_timestamp", None) if timed_actions else None
@@ -603,6 +623,24 @@ class RobotClient:
         """Check if there are actions available in the queue"""
         with self.action_queue_lock:
             return not self.action_queue.empty()
+
+    def _accept_action_delivery(self, task: str, task_generation: int) -> bool:
+        """Hook for clients that isolate interactive task generations."""
+
+        return True
+
+    def discard_pending_work(self) -> None:
+        """Drop locally queued/pending work without rewinding the action clock."""
+
+        with self.action_queue_lock:
+            self.action_queue = Queue()
+        with self._pending_observation_lock:
+            self._pending_observation = False
+            self._pending_observation_sent_at = None
+            self._pending_observation_request_id = None
+            self._pending_observation_value = None
+            self._pending_observation_retry_due = False
+        self.must_go.set()
 
     def _action_tensor_to_action_dict(self, action_tensor: torch.Tensor) -> dict[str, float]:
         action = {key: action_tensor[i].item() for i, key in enumerate(self.robot.action_features)}
@@ -723,8 +761,9 @@ class RobotClient:
             # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
+            selected_task, task_generation = self._task_snapshot(task)
             raw_observation: RawObservation = self.robot.get_observation()
-            raw_observation["task"] = task
+            raw_observation["task"] = selected_task
 
             with self.latest_action_lock:
                 latest_action = self.latest_action
@@ -733,6 +772,7 @@ class RobotClient:
                 timestamp=time.time(),  # need time.time() to compare timestamps across client and server
                 observation=raw_observation,
                 timestep=self._next_observation_timestep(latest_action),
+                task_generation=task_generation,
             )
 
             obs_capture_time = time.perf_counter() - start_time
@@ -776,6 +816,9 @@ class RobotClient:
 
         except Exception as e:
             self.logger.error(f"Error in observation sender: {e}")
+
+    def _task_snapshot(self, default_task: str) -> tuple[str, int]:
+        return default_task, 0
 
     def control_loop(self, task: str, verbose: bool = False) -> tuple[Observation, Action]:
         """Combined function for executing actions and streaming observations"""

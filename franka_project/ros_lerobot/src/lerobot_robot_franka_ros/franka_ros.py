@@ -106,6 +106,14 @@ class FrankaRos(Robot):
         return self._backend.plan_execution_complete()
 
     @check_if_not_connected
+    def set_gateway_armed(self, armed: bool, *, timeout_s: float) -> tuple[bool, str]:
+        """Arm/disarm the external safety gateway through its existing ROS service."""
+
+        if not isinstance(self._backend, Ros2Backend):
+            raise RuntimeError("Gateway arming is only available in ROS2 interface mode")
+        return self._backend.set_gateway_armed(armed, timeout_s=timeout_s)
+
+    @check_if_not_connected
     def get_qpos(self):
         """Return the seven-joint sideband without changing canonical Franka state10."""
 
