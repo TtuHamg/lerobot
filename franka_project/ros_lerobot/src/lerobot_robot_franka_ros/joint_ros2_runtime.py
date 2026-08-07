@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 _NANOSECONDS_PER_SECOND = 1_000_000_000
 _SCHEMA_VERSION = 1
+_PLAN_ACTIVATION_GRACE_S = 0.5
 
 
 def _clamp_continuous_gripper_commands(
@@ -125,6 +126,8 @@ class _PlanProgress:
     plan_id: int
     published_monotonic: float
     ack_received: bool = False
+    ack_result: int | None = None
+    rejected: bool = False
     seen_active: bool = False
     completed: bool = False
     error: str | None = None
@@ -416,17 +419,23 @@ class JointRos2Runtime:
             ):
                 return
             progress.ack_received = True
+            progress.ack_result = int(message.result)
             if not bool(message.accepted):
+                progress.rejected = True
                 progress.error = (
                     f"joint gateway rejected plan {progress.session_id}/{progress.plan_id}: "
                     f"{message.detail}"
                 )
+            elif progress.ack_result in {0, 2}:
+                # SHADOW and preflight-only plans are validation-only and never
+                # become active execution plans.
+                progress.completed = True
 
     def _safety_gateway_status_callback(self, message: Any) -> None:
         with self._plan_lock:
             self._latest_gateway_status = message
             progress = self._plan_progress
-            if progress is None:
+            if progress is None or progress.completed or progress.error is not None:
                 return
 
             matches_plan = (
@@ -436,8 +445,22 @@ class JointRos2Runtime:
             if bool(message.has_active_plan) and matches_plan:
                 progress.seen_active = True
                 return
-            if not progress.seen_active or bool(message.has_active_plan):
+            if bool(message.has_active_plan):
                 return
+            if not progress.seen_active:
+                elapsed = time.monotonic() - progress.published_monotonic
+                if (
+                    not progress.ack_received
+                    or elapsed < _PLAN_ACTIVATION_GRACE_S
+                ):
+                    return
+                node = self._node
+                if node is not None:
+                    node.get_logger().warning(
+                        "Gateway active-plan status was not observed for "
+                        f"{progress.session_id}/{progress.plan_id}; accepting "
+                        "the later ARMED/no-active status as completion"
+                    )
             if bool(message.armed) or bool(message.shadow):
                 progress.completed = True
             else:
@@ -452,8 +475,17 @@ class JointRos2Runtime:
         with self._plan_lock:
             progress = self._plan_progress
             if progress is not None:
-                if progress.error is not None:
+                if progress.rejected:
+                    node = self._node
+                    if node is not None:
+                        node.get_logger().warning(
+                            f"{progress.error}; skipping rejected chunk"
+                        )
+                    self._plan_progress = None
+                    progress = None
+                elif progress.error is not None:
                     raise JointRos2RuntimeStateError(progress.error)
+            if progress is not None:
                 elapsed = time.monotonic() - progress.published_monotonic
                 if elapsed > float(self.config.action_execution_timeout_s):
                     raise JointRos2RuntimeStateError(

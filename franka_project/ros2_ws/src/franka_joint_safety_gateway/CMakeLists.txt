@@ -14,12 +14,9 @@ find_package(control_msgs REQUIRED)
 find_package(franka_cartesian_safety_gateway REQUIRED)
 find_package(franka_safety_interfaces REQUIRED)
 find_package(lerobot_franka_interfaces REQUIRED)
-find_package(moveit_core REQUIRED)
-find_package(moveit_ros_planning REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_library(SYSTEM_CURL NAMES libcurl.so.4
   PATHS /usr/lib/x86_64-linux-gnu
@@ -37,14 +34,14 @@ target_include_directories(joint_preflight PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(joint_preflight joint_validation)
 ament_target_dependencies(joint_preflight
-  franka_cartesian_safety_gateway moveit_core moveit_ros_planning rclcpp)
+  franka_cartesian_safety_gateway)
 
 add_executable(gateway_node src/gateway_node.cpp)
 target_link_libraries(gateway_node joint_preflight joint_validation)
 ament_target_dependencies(gateway_node
   control_msgs franka_cartesian_safety_gateway franka_safety_interfaces
-  lerobot_franka_interfaces moveit_core moveit_ros_planning rclcpp
-  rclcpp_action sensor_msgs std_msgs std_srvs)
+  lerobot_franka_interfaces rclcpp
+  rclcpp_action sensor_msgs std_srvs)
 target_link_libraries(gateway_node ${SYSTEM_CURL})
 
 install(TARGETS joint_validation joint_preflight gateway_node
@@ -52,8 +49,6 @@ install(TARGETS joint_validation joint_preflight gateway_node
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
-install(PROGRAMS scripts/planning_scene_from_yaml.py
-  DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
@@ -62,6 +57,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_joint_validation test/test_validation.cpp)
   target_link_libraries(test_joint_validation joint_validation)
   target_include_directories(test_joint_validation PRIVATE include)
+
+  ament_add_gtest(test_joint_preflight test/test_joint_preflight.cpp)
+  target_link_libraries(test_joint_preflight joint_preflight joint_validation)
+  target_include_directories(test_joint_preflight PRIVATE include)
 endif()
 
 ament_export_include_directories(include)

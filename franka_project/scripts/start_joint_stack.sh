@@ -1,21 +1,22 @@
 #!/bin/bash
 # Bring up the Franka controller/observations with the joint safety gateway.
-# Defaults to SHADOW and never arms automatically.
+# Defaults to SHADOW without cameras and never arms automatically.
 set -euo pipefail
 
 MODE=shadow
-WITH_CAM=true
-REQUIRE_ENVIRONMENT_SCENE=false
+WITH_CAM=false
+FCI_CPU_AFFINITY="10"
+GATEWAY_CPU_AFFINITY="9"
+QPOS_RELAY_CPU_AFFINITY="7"
 for arg in "$@"; do
   case "$arg" in
     --shadow) MODE=shadow ;;
     --execute) MODE=execute ;;
     --no-cam) WITH_CAM=false ;;
     --cam) WITH_CAM=true ;;
-    --require-environment-scene) REQUIRE_ENVIRONMENT_SCENE=true ;;
     *)
       echo "Unknown option: $arg"
-      echo "Use --shadow, --execute, --cam, --no-cam, --require-environment-scene"
+      echo "Use --shadow, --execute, --cam, or --no-cam"
       exit 2
       ;;
   esac
@@ -25,6 +26,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 ROS_WS="$REPO_ROOT/franka_project/ros2_ws"
 LOG_DIR="$HOME/franka/logs/joint_validation"
+REALTIME_CONFIG="$SCRIPT_DIR/configure_fci_realtime.sh"
 mkdir -p "$LOG_DIR"
 
 # ROS/ament setup scripts probe optional variables such as
@@ -64,12 +66,22 @@ wait_for_topic_sample() {
 }
 
 # stop_all predates this package, so explicitly remove an earlier joint gateway.
+pkill -INT -f "python -m [l]erobot_robot_franka_ros.joint_ros2_client" \
+  2>/dev/null || true
+pkill -INT -f "python -m [l]erobot_robot_franka_ros.ros2_client" \
+  2>/dev/null || true
+pkill -INT -f "[c]artesian_ik_gateway.py" 2>/dev/null || true
 pkill -INT -f "joint_safety_gateway.launch.py" 2>/dev/null || true
 pkill -INT -f "franka_joint_safety_gateway.*/gateway_node" 2>/dev/null || true
 sleep 0.5
 bash "$HOME/franka/stop_all.sh" --keep-haply-manager
 echo "NOTE: stop_all fault analysis above may describe a historical run."
 echo "Current startup logs: $LOG_DIR"
+
+if ! bash "$REALTIME_CONFIG" --check; then
+  echo "Applying Franka FCI host tuning (sudo may request your password)..."
+  sudo FRANKA_NIC=enp1s0 bash "$REALTIME_CONFIG" --apply
+fi
 
 STARTUP_COMPLETE=false
 cleanup_failed_start() {
@@ -114,6 +126,7 @@ fi
 # settled; process and USB startup spikes can violate the FCI deadline.
 nohup ros2 launch franka_arm_controllers joint_impedance_ik_controller.launch.py \
   control_mode:=real_validation use_rviz:=false \
+  fci_cpu_affinity:="$FCI_CPU_AFFINITY" \
   >"$LOG_DIR/arm_controller.log" 2>&1 &
 ARM_LAUNCH_PID=$!
 
@@ -138,6 +151,23 @@ if [[ "$COMMAND_SOURCE" != *"safety_gateway"* ]]; then
   echo "ERROR: controller command_source is not safety_gateway"
   exit 1
 fi
+
+# taskset already constrains every controller-manager thread to CPU10 before
+# the first 1 kHz cycle. Add the persistent systemd cpuset when this host has it.
+if [[ -x /usr/local/sbin/franka-fci-pin.sh ]]; then
+  sudo /usr/local/sbin/franka-fci-pin.sh
+fi
+
+# The Python 1 kHz -> 30 Hz relay is CPU-heavy enough to suffer long gaps on an
+# E-core under camera/client load. Keep all of its threads on one P-core.
+mapfile -t QPOS_RELAY_PIDS < <(pgrep -f "[j]oint_states_30hz.py" || true)
+if ((${#QPOS_RELAY_PIDS[@]} == 0)); then
+  echo "ERROR: joint_states_30hz.py is not running"
+  exit 1
+fi
+for pid in "${QPOS_RELAY_PIDS[@]}"; do
+  taskset -apc "$QPOS_RELAY_CPU_AFFINITY" "$pid" >/dev/null
+done
 
 echo "Verifying Franka controller stability for 10 seconds..."
 sleep 10
@@ -173,15 +203,9 @@ if [[ "$MODE" == "execute" ]]; then
   SHADOW=false
   PREFLIGHT_ONLY=false
 fi
-LAUNCH_SITE_SCENE=false
-if [[ "$REQUIRE_ENVIRONMENT_SCENE" == "true" ]]; then
-  LAUNCH_SITE_SCENE=true
-fi
-
-nohup ros2 launch franka_joint_safety_gateway joint_safety_gateway.launch.py \
+nohup taskset -c "$GATEWAY_CPU_AFFINITY" \
+  ros2 launch franka_joint_safety_gateway joint_safety_gateway.launch.py \
   enabled:="$ENABLED" shadow:="$SHADOW" preflight_only:="$PREFLIGHT_ONLY" \
-  require_environment_scene:="$REQUIRE_ENVIRONMENT_SCENE" \
-  launch_site_scene:="$LAUNCH_SITE_SCENE" launch_readiness_monitor:=true \
   require_chunk_publisher:=true \
   hold_after_plan_completion:=false \
   >"$LOG_DIR/joint_safety_gateway.log" 2>&1 &
@@ -194,8 +218,7 @@ for _ in $(seq 1 30); do
       2>/dev/null || true
   )"
   GATEWAY_READY=true
-  for gate in "state_fresh: true" "preflight_available: true" \
-      "robot_ready: true" "controller_ready: true"; do
+  for gate in "state_fresh: true" "preflight_available: true"; do
     if [[ "$GATEWAY_STATUS" != *"$gate"* ]]; then
       GATEWAY_READY=false
       break
@@ -226,6 +249,10 @@ echo "Action input : /lerobot/franka/joint_action_chunk"
 echo "ACK          : /lerobot/franka/joint_action_chunk_ack"
 echo "Status       : /lerobot/franka/joint_safety_gateway_status"
 echo "Logs         : $LOG_DIR"
+echo "FCI CPU      : $FCI_CPU_AFFINITY (Franka NIC IRQs: CPU8)"
+echo "Gateway CPU  : $GATEWAY_CPU_AFFINITY"
+echo "qpos relay CPU: $QPOS_RELAY_CPU_AFFINITY"
+echo "Safety mode  : 3x slowdown; 0.15 rad/s; measured overspeed HOLD; no collision model"
 echo
 if [[ "$MODE" == "shadow" ]]; then
   echo "SHADOW cannot actuate. Start the client, then inspect ACK/status."

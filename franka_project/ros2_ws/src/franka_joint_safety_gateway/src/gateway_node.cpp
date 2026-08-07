@@ -27,7 +27,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
-#include "std_msgs/msg/bool.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 
 namespace franka_joint_safety_gateway {
@@ -89,40 +88,28 @@ public:
         seconds_to_ns(parameter<double>("state_timeout_s", 0.15));
     state_stamp_timeout_ns_ =
         seconds_to_ns(parameter<double>("state_stamp_timeout_s", 0.5));
-    readiness_timeout_ns_ =
-        seconds_to_ns(parameter<double>("readiness_timeout_s", 0.5));
     command_deadline_ns_ =
         seconds_to_ns(parameter<double>("command_deadline_s", 0.030));
     publisher_watchdog_ns_ =
         seconds_to_ns(parameter<double>("publisher_watchdog_s", 0.030));
     settle_window_ns_ =
         seconds_to_ns(parameter<double>("settle_window_s", 0.25));
-    feedback_timeout_ns_ =
-        seconds_to_ns(parameter<double>("applied_feedback_timeout_s", 0.05));
-    feedback_grace_ns_ =
-        seconds_to_ns(parameter<double>("applied_feedback_grace_s", 0.10));
-    tracking_grace_ns_ =
-        seconds_to_ns(parameter<double>("tracking_grace_s", 0.5));
+    feedback_status_timeout_ns_ =
+        seconds_to_ns(parameter<double>("feedback_status_timeout_s", 0.10));
     command_period_ms_ = parameter<int>("command_period_ms", 5);
     max_state_drift_rad_ =
         parameter<double>("max_preflight_state_drift_rad", 0.01);
-    max_tracking_error_rad_ =
-        parameter<double>("max_joint_tracking_error_rad", 0.25);
-    max_applied_sequence_lag_ = static_cast<std::uint64_t>(
-        parameter<int>("max_applied_sequence_lag", 20));
     require_command_subscriber_ =
         parameter<bool>("require_command_subscriber", true);
     require_unique_command_publisher_ =
         parameter<bool>("require_unique_command_publisher", true);
     require_chunk_publisher_ = parameter<bool>("require_chunk_publisher", true);
-    require_robot_readiness_ = parameter<bool>("require_robot_readiness", true);
-    require_controller_readiness_ =
-        parameter<bool>("require_controller_readiness", true);
     hold_after_plan_completion_ =
         parameter<bool>("hold_after_plan_completion", false);
     execute_gripper_ = parameter<bool>("execute_gripper", true);
     gripper_action_name_ = parameter<std::string>(
-        "gripper_action_name", "/gripper/robotiq_gripper_controller/gripper_cmd");
+        "gripper_action_name",
+        "/gripper/robotiq_gripper_controller/gripper_cmd");
     gripper_max_effort_ = parameter<double>("gripper_max_effort", 16.0);
     gripper_command_deadband_ =
         parameter<double>("gripper_command_deadband", 0.02);
@@ -144,32 +131,23 @@ public:
     limits_.gripper_max =
         static_cast<float>(parameter<double>("gripper_max", 1.0));
 
-    preflight_settings_.group_name =
-        parameter<std::string>("moveit_group", "fr3_arm");
-    preflight_settings_.planning_scene_topic = parameter<std::string>(
-        "planning_scene_topic", "/monitored_planning_scene");
-    preflight_settings_.collision_object_topic =
-        parameter<std::string>("collision_object_topic", "/collision_object");
-    preflight_settings_.planning_scene_world_topic = parameter<std::string>(
-        "planning_scene_world_topic", "/planning_scene_world");
-    preflight_settings_.require_environment_scene =
-        parameter<bool>("require_environment_scene", true);
     preflight_settings_.joint_position_margin_rad =
         parameter<double>("joint_position_margin_rad", 0.03);
-    preflight_settings_.minimum_jacobian_singular_value =
-        parameter<double>("minimum_jacobian_singular_value", 0.02);
-    preflight_settings_.maximum_jacobian_condition =
-        parameter<double>("maximum_jacobian_condition", 150.0);
-    preflight_settings_.collision_interpolation_step_rad =
-        parameter<double>("collision_interpolation_step_rad", 0.03);
+    preflight_settings_.execution_slowdown_scale =
+        parameter<double>("execution_slowdown_scale", 1.0);
     preflight_settings_.max_retiming_scale =
         parameter<double>("max_retiming_scale", 1.0);
     preflight_settings_.motion_limits.max_position_step = read_joint_array(
         "max_joint_step_rad", {0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08});
     preflight_settings_.motion_limits.max_velocity = read_joint_array(
         "max_joint_velocity_rad_s", {0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15});
-    preflight_settings_.motion_limits.max_acceleration = read_joint_array(
-        "max_joint_acceleration_rad_s2", {0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75});
+    preflight_settings_.motion_limits.max_acceleration =
+        read_joint_array("max_joint_acceleration_rad_s2",
+                         {0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75});
+    max_measured_velocity_rad_s_ =
+        parameter<double>("max_measured_joint_velocity_rad_s", 0.25);
+    overspeed_guard_samples_ =
+        parameter<int>("overspeed_guard_consecutive_samples", 2);
 
     joint_state_topic_ =
         parameter<std::string>("joint_state_topic", "/franka/joint_states");
@@ -183,20 +161,18 @@ public:
                                                  "/franka/safe_joint_command");
     feedback_topic_ = parameter<std::string>("safety_feedback_topic",
                                              "/franka/safety_command_feedback");
-    robot_readiness_topic_ =
-        parameter<std::string>("robot_readiness_topic", "/franka/robot_ready");
-    controller_readiness_topic_ = parameter<std::string>(
-        "controller_readiness_topic", "/franka/controller_ready");
 
     if (command_period_ms_ < 1 || command_period_ms_ > 10 ||
         publisher_watchdog_ns_ <= command_period_ms_ * 1'000'000LL ||
         !std::isfinite(max_state_drift_rad_) || max_state_drift_rad_ <= 0.0 ||
-        !std::isfinite(max_tracking_error_rad_) ||
-        max_tracking_error_rad_ <= 0.0 ||
-        !std::isfinite(preflight_settings_.collision_interpolation_step_rad) ||
-        preflight_settings_.collision_interpolation_step_rad <= 0.0 ||
+        !std::isfinite(preflight_settings_.joint_position_margin_rad) ||
+        preflight_settings_.joint_position_margin_rad < 0.0 ||
+        !std::isfinite(preflight_settings_.execution_slowdown_scale) ||
+        preflight_settings_.execution_slowdown_scale < 1.0 ||
         !std::isfinite(preflight_settings_.max_retiming_scale) ||
         preflight_settings_.max_retiming_scale < 1.0 ||
+        !std::isfinite(max_measured_velocity_rad_s_) ||
+        max_measured_velocity_rad_s_ <= 0.0 || overspeed_guard_samples_ < 1 ||
         !std::isfinite(limits_.gripper_min) ||
         !std::isfinite(limits_.gripper_max) ||
         limits_.gripper_min > limits_.gripper_max ||
@@ -239,23 +215,6 @@ public:
         feedback_topic_, qos,
         std::bind(&GatewayNode::on_feedback, this, std::placeholders::_1),
         state_options);
-    robot_readiness_subscription_ = create_subscription<std_msgs::msg::Bool>(
-        robot_readiness_topic_, qos,
-        [this](const std_msgs::msg::Bool::SharedPtr message) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          robot_ready_ = message->data;
-          last_robot_readiness_ns_ = now_ns();
-        },
-        state_options);
-    controller_readiness_subscription_ =
-        create_subscription<std_msgs::msg::Bool>(
-            controller_readiness_topic_, qos,
-            [this](const std_msgs::msg::Bool::SharedPtr message) {
-              std::lock_guard<std::mutex> lock(mutex_);
-              controller_ready_ = message->data;
-              last_controller_readiness_ns_ = now_ns();
-            },
-            state_options);
 
     ack_publisher_ =
         create_publisher<lerobot_franka_interfaces::msg::JointActionChunkAck>(
@@ -278,9 +237,8 @@ public:
   }
 
   void initialize_preflight() {
-    auto provider = std::make_shared<JointPreflightProvider>(
-        std::static_pointer_cast<rclcpp::Node>(shared_from_this()),
-        preflight_settings_);
+    auto provider =
+        std::make_shared<JointPreflightProvider>(preflight_settings_);
     std::lock_guard<std::mutex> lock(mutex_);
     preflight_ = std::move(provider);
     if (!preflight_->ready() && enabled_ && !shadow_ && !preflight_only_) {
@@ -342,23 +300,6 @@ private:
            time_ns - *last_joint_state_ns_ <= state_timeout_ns_;
   }
 
-  bool input_ready_locked(bool required, bool value,
-                          const std::optional<std::int64_t> &stamp,
-                          std::int64_t time_ns) const {
-    return !required || (value && stamp.has_value() && time_ns >= *stamp &&
-                         time_ns - *stamp <= readiness_timeout_ns_);
-  }
-
-  bool robot_ready_locked(std::int64_t time_ns) const {
-    return input_ready_locked(require_robot_readiness_, robot_ready_,
-                              last_robot_readiness_ns_, time_ns);
-  }
-
-  bool controller_ready_locked(std::int64_t time_ns) const {
-    return input_ready_locked(require_controller_readiness_, controller_ready_,
-                              last_controller_readiness_ns_, time_ns);
-  }
-
   bool unique_safe_command_publisher_locked() const {
     return !require_unique_command_publisher_ ||
            count_publishers(safe_command_topic_) == 1;
@@ -372,25 +313,57 @@ private:
       return;
     }
     std::unordered_map<std::string, double> positions;
+    std::unordered_map<std::string, double> velocities;
+    const bool has_velocities =
+        message->velocity.size() == message->name.size();
     for (std::size_t index = 0; index < message->name.size(); ++index) {
       positions.emplace(message->name[index], message->position[index]);
+      if (has_velocities) {
+        velocities.emplace(message->name[index], message->velocity[index]);
+      }
     }
     JointArray ordered{};
+    double peak_velocity = 0.0;
+    std::size_t peak_velocity_joint = 0;
     for (std::size_t index = 0; index < required_names.size(); ++index) {
       const auto found = positions.find(required_names[index]);
       if (found == positions.end() || !std::isfinite(found->second)) {
         return;
       }
       ordered[index] = found->second;
+      if (has_velocities) {
+        const auto velocity = velocities.find(required_names[index]);
+        if (velocity == velocities.end() || !std::isfinite(velocity->second)) {
+          return;
+        }
+        if (std::abs(velocity->second) > peak_velocity) {
+          peak_velocity = std::abs(velocity->second);
+          peak_velocity_joint = index;
+        }
+      }
     }
     const auto stamp = to_nanoseconds(message->header.stamp);
     const auto receive = now_ns();
-    if (stamp <= 0 || stamp > receive || receive - stamp > state_stamp_timeout_ns_) {
+    if (stamp <= 0 || stamp > receive ||
+        receive - stamp > state_stamp_timeout_ns_) {
       return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     current_joints_ = ordered;
     last_joint_state_ns_ = receive;
+    if (execution_ && safety_state_.armed() && has_velocities) {
+      overspeed_hits_ = peak_velocity > max_measured_velocity_rad_s_
+                            ? overspeed_hits_ + 1
+                            : 0;
+      if (overspeed_hits_ >= overspeed_guard_samples_) {
+        hold_locked("measured joint overspeed: joint " +
+                    std::to_string(peak_velocity_joint + 1) +
+                    " velocity=" + std::to_string(peak_velocity) + " rad/s > " +
+                    std::to_string(max_measured_velocity_rad_s_) + " rad/s");
+      }
+    } else {
+      overspeed_hits_ = 0;
+    }
   }
 
   void on_feedback(
@@ -399,21 +372,20 @@ private:
     const auto receive = now_ns();
     const auto stamp = to_nanoseconds(message->header.stamp);
     if (stamp <= 0 || stamp > receive ||
-        receive - stamp > feedback_timeout_ns_) {
+        receive - stamp > feedback_status_timeout_ns_) {
       return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!execution_ || !command_watchdog_active_) {
+    if (!execution_) {
       return;
     }
     const auto &plan = execution_->plan;
     if (message->session_id != plan.session_id ||
         message->plan_id != plan.plan_id) {
-      hold_locked("controller feedback identifies a different plan");
       return;
     }
     if (!message->accepted || !message->applied) {
-      hold_locked("controller rejected command: " + message->reason);
+      hold_locked("controller rejected/stopped command: " + message->reason);
       return;
     }
     if (message->sequence < last_applied_sequence_ ||
@@ -493,18 +465,9 @@ private:
                     "joint gateway is not ARMED"};
         } else if (result.accepted() && !state_fresh_locked(receive)) {
           result = {ResultCode::kRejectedStateStale, "joint state is stale"};
-        } else if (result.accepted() && !robot_ready_locked(receive)) {
-          result = {ResultCode::kRejectedStateStale,
-                    "robot readiness is absent/stale/false"};
-        } else if (result.accepted() && !preflight_only_ &&
-                   !controller_ready_locked(receive)) {
-          result = {ResultCode::kRejectedNotArmed,
-                    "controller readiness is absent/stale/false"};
-        } else if (result.accepted() && (!preflight_ || !preflight_->ready() ||
-                                         !preflight_->planning_scene_ready())) {
-          result = {
-              ResultCode::kRejectedPreflightUnavailable,
-              "MoveIt joint preflight or monitored world scene is unavailable"};
+        } else if (result.accepted() && (!preflight_ || !preflight_->ready())) {
+          result = {ResultCode::kRejectedPreflightUnavailable,
+                    "joint motion-limit preflight is unavailable"};
         }
         if (result.accepted()) {
           provider = preflight_;
@@ -529,11 +492,9 @@ private:
         }
       }
       if ((!preflight_only_ && !safety_state_.armed()) ||
-          !state_fresh_locked(finish) || !robot_ready_locked(finish) ||
-          (!preflight_only_ && !controller_ready_locked(finish)) ||
-          !provider->planning_scene_ready() || state_drifted) {
+          !state_fresh_locked(finish) || state_drifted) {
         result = {ResultCode::kRejectedStateStale,
-                  "safety gates or measured joints changed during preflight"};
+                  "measured joints became stale or changed during preflight"};
       } else if (!preflight_result.accepted) {
         result = {preflight_result.failure_code, preflight_result.detail};
       } else {
@@ -548,10 +509,10 @@ private:
                         preflight_result.detail};
           if (!preflight_only_) {
             execution_ = ExecutablePlan{accepted, current};
+            overspeed_hits_ = 0;
             last_gripper_waypoint_index_.reset();
             last_command_tick_ = std::chrono::steady_clock::now();
             command_watchdog_active_ = false;
-            first_command_ns_.reset();
             last_applied_feedback_ns_.reset();
             last_applied_sequence_ = 0;
             last_applied_waypoint_index_ = 0;
@@ -577,6 +538,15 @@ private:
     ack.replaced_active_plan = replaced;
     ack.waypoint_count = static_cast<std::uint32_t>(message->timesteps.size());
     ack.detail = result.detail;
+    if (ack.accepted) {
+      RCLCPP_INFO(
+          get_logger(), "PLAN_ACCEPTED %s/%llu: %s", ack.session_id.c_str(),
+          static_cast<unsigned long long>(ack.plan_id), ack.detail.c_str());
+    } else {
+      RCLCPP_WARN(
+          get_logger(), "PLAN_REJECTED %s/%llu: %s", ack.session_id.c_str(),
+          static_cast<unsigned long long>(ack.plan_id), ack.detail.c_str());
+    }
     ack_publisher_->publish(std::move(ack));
     publish_status();
   }
@@ -597,9 +567,9 @@ private:
                    shadow_ || preflight_only_,
                    preflight_ && preflight_->ready(),
                    state_fresh_locked(now),
-                   preflight_ && preflight_->planning_scene_ready(),
-                   robot_ready_locked(now),
-                   controller_ready_locked(now)};
+                   true,
+                   true,
+                   true};
     response->success = safety_state_.arm(gates, &response->message);
     if (response->success && require_command_subscriber_ &&
         safe_command_publisher_->get_subscription_count() == 0) {
@@ -645,7 +615,7 @@ private:
     execution_.reset();
     plans_.clear();
     command_watchdog_active_ = false;
-    first_command_ns_.reset();
+    overspeed_hits_ = 0;
     if (cancel_gripper) {
       cancel_gripper_locked();
     } else {
@@ -755,27 +725,22 @@ private:
                              steady_now - last_command_tick_)
                              .count();
         if (gap > publisher_watchdog_ns_) {
-          hold_locked("command publisher watchdog expired");
+          hold_locked("command publisher watchdog expired: gap=" +
+                      std::to_string(static_cast<double>(gap) / 1e6) + " ms");
           return;
         }
       }
       last_command_tick_ = steady_now;
       const auto now = ros_now.nanoseconds();
+      if (!execution_) {
+        // Endpoint liveness matters only while commands are being generated.
+        // Keeping an idle ARMED gateway alive avoids a startup deadlock where
+        // the client waits for ARMED before its first observation while DDS
+        // discovery has not exposed its chunk publisher yet.
+        return;
+      }
       if (!state_fresh_locked(now)) {
-        hold_locked("joint-state watchdog expired");
-        return;
-      }
-      if (!robot_ready_locked(now)) {
-        hold_locked("robot readiness watchdog expired");
-        return;
-      }
-      if (!controller_ready_locked(now)) {
-        hold_locked("controller readiness watchdog expired");
-        return;
-      }
-      if (!preflight_ || !preflight_->ready() ||
-          !preflight_->planning_scene_ready()) {
-        hold_locked("MoveIt joint preflight became unavailable");
+        hold_locked("joint-state watchdog expired during execution");
         return;
       }
       if (require_command_subscriber_ &&
@@ -790,23 +755,6 @@ private:
       if (require_chunk_publisher_ && count_publishers(chunk_topic_) == 0) {
         hold_locked("joint action publisher disappeared");
         return;
-      }
-      if (!execution_) {
-        return;
-      }
-      if (first_command_ns_.has_value() &&
-          now - *first_command_ns_ > feedback_grace_ns_) {
-        if (!last_applied_feedback_ns_.has_value() ||
-            now < *last_applied_feedback_ns_ ||
-            now - *last_applied_feedback_ns_ > feedback_timeout_ns_) {
-          hold_locked("controller applied-feedback watchdog expired");
-          return;
-        }
-        if (sequence_ >= last_applied_sequence_ &&
-            sequence_ - last_applied_sequence_ > max_applied_sequence_lag_) {
-          hold_locked("controller applied-feedback progression lag exceeded");
-          return;
-        }
       }
 
       const auto &plan = execution_->plan;
@@ -851,12 +799,6 @@ private:
       }
       measured_waypoint_index_ = target.waypoint_index;
       measured_source_timestep_ = target.source_timestep;
-      if (now >= plan.start_ns && now - plan.start_ns >= tracking_grace_ns_ &&
-          tracking_error_rad_ > max_tracking_error_rad_) {
-        hold_locked("joint tracking watchdog exceeded: " +
-                    std::to_string(tracking_error_rad_) + " rad");
-        return;
-      }
       if (!maybe_send_gripper_goal_locked(plan, target.waypoint_index, now)) {
         return;
       }
@@ -873,12 +815,10 @@ private:
       command.positions = target.positions;
       command.safety_state =
           franka_safety_interfaces::msg::SafeJointCommand::ARMED;
-      command.status = "MoveIt-preflighted interpolated FastWAM joint target; "
-                       "gripper scheduled through Robotiq action";
+      command.status =
+          "motion-limits-preflighted FastWAM joint target; collision and "
+          "execution watchdogs disabled";
       command_watchdog_active_ = true;
-      if (!first_command_ns_.has_value()) {
-        first_command_ns_ = now;
-      }
       publish = true;
     }
     if (publish) {
@@ -901,14 +841,14 @@ private:
       status.shadow = state == GatewayState::kShadow;
       status.armed = state == GatewayState::kArmed;
       status.state_fresh = state_fresh_locked(time_ns);
-      status.preflight_available = preflight_ && preflight_->ready() &&
-                                   preflight_->planning_scene_ready();
-      status.robot_ready = robot_ready_locked(time_ns);
-      status.controller_ready = controller_ready_locked(time_ns);
+      status.preflight_available = preflight_ && preflight_->ready();
+      // These gates are intentionally disabled in motion-limits-only mode.
+      status.robot_ready = true;
+      status.controller_ready = true;
       status.applied_feedback_fresh =
           last_applied_feedback_ns_.has_value() &&
           time_ns >= *last_applied_feedback_ns_ &&
-          time_ns - *last_applied_feedback_ns_ <= feedback_timeout_ns_;
+          time_ns - *last_applied_feedback_ns_ <= feedback_status_timeout_ns_;
       status.has_active_plan =
           execution_.has_value() || plans_.active_plan().has_value();
       status.last_command_sequence = sequence_;
@@ -926,10 +866,7 @@ private:
           last_applied_feedback_ns_ ? time_ns - *last_applied_feedback_ns_
                                     : std::numeric_limits<std::int32_t>::max() *
                                           kNanosecondsPerSecond);
-      status.robot_readiness_age = duration_from_nanoseconds(
-          last_robot_readiness_ns_ ? time_ns - *last_robot_readiness_ns_
-                                   : std::numeric_limits<std::int32_t>::max() *
-                                         kNanosecondsPerSecond);
+      status.robot_readiness_age = duration_from_nanoseconds(0);
       if (plans_.active_plan()) {
         const auto &plan = *plans_.active_plan();
         status.session_id = plan.session_id;
@@ -949,7 +886,9 @@ private:
           status.next_waypoint_due = from_nanoseconds(plan.start_ns);
         }
       }
-      status.detail = detail_.empty() ? safety_state_.detail() : detail_;
+      status.detail =
+          "LOW_SPEED_NO_COLLISION (state/feedback/overspeed HOLD enabled): " +
+          (detail_.empty() ? safety_state_.detail() : detail_);
     }
     status_publisher_->publish(std::move(status));
   }
@@ -963,23 +902,19 @@ private:
   bool require_command_subscriber_{true};
   bool require_unique_command_publisher_{true};
   bool require_chunk_publisher_{true};
-  bool require_robot_readiness_{true};
-  bool require_controller_readiness_{true};
   bool hold_after_plan_completion_{false};
   bool execute_gripper_{true};
   int command_period_ms_{5};
   std::int64_t state_timeout_ns_{150'000'000};
   std::int64_t state_stamp_timeout_ns_{500'000'000};
-  std::int64_t readiness_timeout_ns_{500'000'000};
   std::int64_t command_deadline_ns_{30'000'000};
   std::int64_t publisher_watchdog_ns_{30'000'000};
   std::int64_t settle_window_ns_{250'000'000};
-  std::int64_t feedback_timeout_ns_{50'000'000};
-  std::int64_t feedback_grace_ns_{100'000'000};
-  std::int64_t tracking_grace_ns_{500'000'000};
-  std::uint64_t max_applied_sequence_lag_{20};
+  std::int64_t feedback_status_timeout_ns_{100'000'000};
   double max_state_drift_rad_{0.01};
-  double max_tracking_error_rad_{0.25};
+  double max_measured_velocity_rad_s_{0.25};
+  int overspeed_guard_samples_{2};
+  int overspeed_hits_{0};
   double gripper_max_effort_{16.0};
   double gripper_command_deadband_{0.02};
   std::int64_t gripper_min_command_interval_ns_{150'000'000};
@@ -989,8 +924,6 @@ private:
   std::string status_topic_;
   std::string safe_command_topic_;
   std::string feedback_topic_;
-  std::string robot_readiness_topic_;
-  std::string controller_readiness_topic_;
   std::string gripper_action_name_;
   std::string detail_;
   std::mutex mutex_;
@@ -998,16 +931,11 @@ private:
   std::shared_ptr<JointPreflightProvider> preflight_;
   std::optional<JointArray> current_joints_;
   std::optional<std::int64_t> last_joint_state_ns_;
-  std::optional<std::int64_t> last_robot_readiness_ns_;
-  std::optional<std::int64_t> last_controller_readiness_ns_;
   std::optional<std::int64_t> last_applied_feedback_ns_;
-  std::optional<std::int64_t> first_command_ns_;
   std::optional<std::int64_t> last_gripper_command_ns_;
   std::optional<double> last_gripper_command_position_;
   std::optional<std::uint32_t> last_gripper_waypoint_index_;
   std::optional<ExecutablePlan> execution_;
-  bool robot_ready_{false};
-  bool controller_ready_{false};
   std::uint64_t sequence_{0};
   std::uint64_t last_applied_sequence_{0};
   std::uint32_t accepted_waypoint_index_{0};
@@ -1030,10 +958,6 @@ private:
       joint_state_subscription_;
   rclcpp::Subscription<franka_safety_interfaces::msg::SafetyCommandFeedback>::
       SharedPtr feedback_subscription_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
-      robot_readiness_subscription_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr
-      controller_readiness_subscription_;
   rclcpp::Publisher<lerobot_franka_interfaces::msg::JointActionChunkAck>::
       SharedPtr ack_publisher_;
   rclcpp::Publisher<lerobot_franka_interfaces::msg::SafetyGatewayStatus>::

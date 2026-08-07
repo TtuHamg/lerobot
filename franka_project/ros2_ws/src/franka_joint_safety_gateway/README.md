@@ -1,14 +1,51 @@
 # Franka joint safety gateway
 
-Fail-closed machine-local consumer for `JointActionChunk`. It validates absolute
-seven-axis FastWAM q-pos trajectories, performs direct MoveIt joint bounds,
-Jacobian and full-path collision preflight, retimes unsafe velocity/acceleration
-only by slowing down, and publishes controller-authorized `SafeJointCommand` at
-200 Hz.
+Machine-local consumer for `JointActionChunk`. It validates absolute seven-axis
+FastWAM q-pos trajectories against fixed FR3 hard limits, per-waypoint step,
+velocity and acceleration limits, optionally retimes a complete plan only by
+slowing it down, and publishes controller-authorized `SafeJointCommand` at
+100 Hz.
 
 The installed defaults are `enabled=false`, `shadow=true`; they cannot actuate.
-The eighth gripper model value is validated as finite and audited but is not
-sent to any gripper controller.
+In execute mode the eighth model value is range-checked and sent to the Robotiq
+gripper action server.
+
+## Low-speed joint safety boundary
+
+This gateway deliberately does **not** load MoveIt and does not check
+self-collision, environment collision, or Jacobian singularity. It requires a
+fresh measured joint state while arming and while accepting each plan so the
+first segment is checked from the real start pose.
+
+Every plan is forced to at least 3x its model period, then retimed further when
+needed to satisfy a 0.065 rad step, 0.15 rad/s velocity, and 0.5 rad/s²
+acceleration envelope. Two consecutive 30 Hz samples above 0.25 rad/s,
+joint-state loss, controller rejection, timer discontinuity, or endpoint loss
+immediately HOLD and clear the active plan. The 1 kHz controller independently
+limits target slew to 0.15 rad/s.
+
+This still does not prevent a slow collision with a box, table, camera, or the
+robot itself. Operators must clear the workspace and keep the physical e-stop
+reachable until a measured collision scene is enabled.
+
+The execute workflow is intentionally reduced to three terminal commands:
+
+```bash
+# Terminal 1: host tuning, old-stack cleanup, controller, gateway and cameras.
+bash franka_project/scripts/start_joint_stack.sh --execute --cam
+
+# Terminal 2: confirm safety and ARM the idle gateway.
+bash franka_project/scripts/arm_joint_gateway.sh
+
+# Terminal 3: start the q-pos client with validated defaults.
+bash franka_project/scripts/run_joint_client.sh "Pick up the cup."
+```
+
+The startup script applies the host tuning with sudo when needed, verifies that
+Franka NIC IRQs are on CPU8 with interrupt coalescing disabled, pins the
+non-realtime Gateway to CPU9, and starts the FCI controller manager on CPU10.
+The 30 Hz qpos relay runs on P-core CPU7. CPU11 remains idle so the FCI
+physical core has no SMT competitor. Cameras remain opt-in through `--cam`.
 
 This gateway and `franka_cartesian_safety_gateway` are mutually exclusive for
 execution. ARM fails when another `/franka/safe_joint_command` publisher exists.

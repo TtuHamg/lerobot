@@ -313,12 +313,15 @@ SHADOW 完成后按第 10 节停机，不要直接切换 EXECUTE。
 ```text
 capture observation N
   -> infer chunk N
-  -> gateway ACK accepts plan N
+  -> gateway uses fresh qpos to validate hard limits/step/velocity/acceleration
+  -> gateway ACK accepts and optionally retimes plan N
   -> execute all retimed waypoints of plan N
-  -> controller feedback confirms applied progress
-  -> gateway reports plan N complete and no tracking fault
+  -> gateway's scheduled plan horizon completes
   -> capture observation N+1
 ```
+
+注意：当前 motion-limits-only 模式不以 controller feedback 或 tracking
+error 判定物理执行完成；`has_active_plan:false` 只表示网关计划时域已结束。
 
 禁止继续使用：
 
@@ -335,8 +338,6 @@ local queue empty
 max_joint_step_rad: [0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
 max_joint_velocity_rad_s: [0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10]
 max_joint_acceleration_rad_s2: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
-tracking_grace_s: 0.15
-max_joint_tracking_error_rad: 0.05
 hold_after_plan_completion: true
 ```
 
@@ -364,11 +365,15 @@ robot_ready: true
 controller_ready: true
 has_active_plan: false
 ```
+pick up the cup
+bash franka_project/scripts/run_joint_client.sh "pick up the cup"
+`robot_ready/controller_ready:true` 在本模式中表示这些 gateway gate 已禁用，
+不是实时 readiness 证明。
 
-8. 确认工作空间和急停；
+8. 确认工作空间无碰撞风险且急停可达；
 9. 由现场操作员显式 ARM；
 10. 首次只允许单个低速 chunk；
-11. 监控 ACK、status、tracking error 和 controller feedback；
+11. 人工监控 ACK、controller active、tracking error 和 controller feedback；
 12. chunk 完成并回到 `has_active_plan:false` 后，才允许下一次 observation。
 
 ARM service：
@@ -421,7 +426,7 @@ ros2 topic echo /lerobot/franka/joint_action_chunk_ack
 ros2 control list_controllers
 ```
 
-立即 DISARM/HOLD 的条件：
+以下条件不会再由 gateway 自动 HOLD；监控者发现后必须立即 DISARM：
 
 - `joint_tracking_error_rad > 0.05`（低速验证阶段）；
 - `state_fresh/robot_ready/controller_ready` 任一变 false；
@@ -464,7 +469,7 @@ ws_tcp_tunnel server 终端日志
 | `qpos skew exceeds limit` | joint state 停止或时间戳异常 | 检查 controller 和 topic hz |
 | `TimedAction missing server_send_timestamp` | server 没返回当前协议字段 | 更新 server |
 | `communication_constraints_violation` | 1 kHz FCI deadline 失败 | Desk Acknowledge；检查 RT/CPU/网卡/启动负载 |
-| `joint tracking watchdog exceeded` | 目标与实测偏差过大 | DISARM；禁止重试；检查 retiming/chunk 连续性 |
+| tracking error 持续增大 | 目标与实测偏差过大；gateway 不会自动 HOLD | 人工 DISARM；禁止重试；检查 retiming/chunk 连续性 |
 | `Publisher 1, Subscription 0` | gateway 未启动或 overlay 错误 | 检查 gateway/build/source |
 
 ## 14. 2026-07-25 事件结论
