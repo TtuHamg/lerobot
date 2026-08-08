@@ -12,6 +12,7 @@ struct PreflightSettings {
   double joint_position_margin_rad{0.03};
   double execution_slowdown_scale{1.0};
   double max_retiming_scale{1.0};
+  double max_plan_excursion_rad{0.30};
   franka_cartesian_safety_gateway::JointMotionLimits motion_limits;
 };
 

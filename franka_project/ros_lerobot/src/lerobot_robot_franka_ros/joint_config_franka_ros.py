@@ -56,6 +56,10 @@ class FrankaJointRosConfig(RobotConfig):
     # finite out-of-range predictions to this hardware safety envelope.
     gripper_command_min_position: float = 0.0
     gripper_command_max_position: float = 0.8
+    # mix3_0804 model convention: 0.944=open, 0.0=closed, opposite to the
+    # Robotiq knuckle convention above. Enable explicitly per checkpoint.
+    gripper_model_open_high: bool = False
+    gripper_model_open_position: float = 0.944
     action_chunk_validity_s: float = 0.5
     action_execution_timeout_s: float = 30.0
     ros2_shutdown_timeout_s: float = 5.0
@@ -114,6 +118,15 @@ class FrankaJointRosConfig(RobotConfig):
             raise ValueError("gripper command limits must be finite real values")
         if self.gripper_command_min_position >= self.gripper_command_max_position:
             raise ValueError("gripper command minimum must be less than maximum")
+        if not isinstance(self.gripper_model_open_high, bool):
+            raise ValueError("gripper_model_open_high must be bool")
+        if (
+            isinstance(self.gripper_model_open_position, bool)
+            or not isinstance(self.gripper_model_open_position, Real)
+            or not math.isfinite(float(self.gripper_model_open_position))
+            or self.gripper_model_open_position <= 0.0
+        ):
+            raise ValueError("gripper_model_open_position must be finite and greater than zero")
         if (
             isinstance(self.observation_buffer_size, bool)
             or not isinstance(self.observation_buffer_size, Integral)

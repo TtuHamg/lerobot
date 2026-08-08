@@ -50,6 +50,44 @@ def _clamp_continuous_gripper_commands(
     return clamped, min(raw), max(raw), clamped_count
 
 
+def _physical_gripper_to_open_high(
+    position: float,
+    *,
+    hardware_minimum: float,
+    hardware_maximum: float,
+    model_open_position: float,
+) -> float:
+    """Convert Robotiq 0=open/high=closed into the 0804 high=open convention."""
+
+    physical = min(max(float(position), hardware_minimum), hardware_maximum)
+    closed_fraction = (physical - hardware_minimum) / (
+        hardware_maximum - hardware_minimum
+    )
+    return model_open_position * (1.0 - closed_fraction)
+
+
+def _open_high_gripper_commands_to_physical(
+    values: Sequence[float],
+    *,
+    hardware_minimum: float,
+    hardware_maximum: float,
+    model_open_position: float,
+) -> tuple[list[float], float, float, int]:
+    """Convert 0804 high=open model targets into Robotiq knuckle positions."""
+
+    bounded, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
+        values,
+        minimum=0.0,
+        maximum=model_open_position,
+    )
+    span = hardware_maximum - hardware_minimum
+    physical = [
+        hardware_minimum + span * (1.0 - value / model_open_position)
+        for value in bounded
+    ]
+    return physical, raw_min, raw_max, clamped_count
+
+
 class JointRos2RuntimeUnavailableError(RuntimeError):
     """Raised when the optional ROS 2 runtime has not been built or sourced."""
 
@@ -372,10 +410,22 @@ class JointRos2Runtime:
             joint_position = positions[joint_index]
             if not math.isfinite(joint_position):
                 raise ValueError("gripper joint position is NaN or Inf")
-            # FastWAM consumes the raw gripper joint position; unlike the Cartesian
-            # runtime, do not normalize it to a [0, 1] closed fraction.
+            model_position = joint_position
+            if self.config.gripper_model_open_high:
+                model_position = _physical_gripper_to_open_high(
+                    joint_position,
+                    hardware_minimum=float(
+                        self.config.gripper_command_min_position
+                    ),
+                    hardware_maximum=float(
+                        self.config.gripper_command_max_position
+                    ),
+                    model_open_position=float(
+                        self.config.gripper_model_open_position
+                    ),
+                )
             self.cache.update_gripper(
-                joint_position,
+                model_position,
                 stamp_ns=_message_stamp_ns(message),
                 received_monotonic_ns=time.monotonic_ns(),
             )
@@ -551,15 +601,36 @@ class JointRos2Runtime:
         message.timesteps = list(chunk.timesteps)
         # positions is a flattened row-major [K*7] array of absolute joint angles.
         message.positions = [float(value) for value in chunk.positions.reshape(-1)]
-        gripper, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
-            chunk.gripper,
-            minimum=float(self.config.gripper_command_min_position),
-            maximum=float(self.config.gripper_command_max_position),
-        )
+        if self.config.gripper_model_open_high:
+            gripper, raw_min, raw_max, clamped_count = (
+                _open_high_gripper_commands_to_physical(
+                    chunk.gripper,
+                    hardware_minimum=float(
+                        self.config.gripper_command_min_position
+                    ),
+                    hardware_maximum=float(
+                        self.config.gripper_command_max_position
+                    ),
+                    model_open_position=float(
+                        self.config.gripper_model_open_position
+                    ),
+                )
+            )
+            convention = "0804 open-high -> Robotiq"
+        else:
+            gripper, raw_min, raw_max, clamped_count = (
+                _clamp_continuous_gripper_commands(
+                    chunk.gripper,
+                    minimum=float(self.config.gripper_command_min_position),
+                    maximum=float(self.config.gripper_command_max_position),
+                )
+            )
+            convention = "native Robotiq"
         node.get_logger().info(
-            "Forwarding continuous FastWAM gripper targets with saturation: count=%d clamped=%d "
+            "Forwarding continuous FastWAM gripper targets (%s): count=%d clamped=%d "
             "raw_range=[%.6f, %.6f] output_range=[%.6f, %.6f]"
             % (
+                convention,
                 len(gripper),
                 clamped_count,
                 raw_min,

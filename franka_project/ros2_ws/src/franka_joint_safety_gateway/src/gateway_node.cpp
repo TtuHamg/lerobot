@@ -115,6 +115,8 @@ public:
         parameter<double>("gripper_command_deadband", 0.02);
     gripper_min_command_interval_ns_ = seconds_to_ns(
         parameter<double>("gripper_min_command_interval_s", 0.15));
+    gripper_contact_abort_nonfatal_min_position_ =
+        parameter<double>("gripper_contact_abort_nonfatal_min_position", 0.5);
 
     limits_.schema_version =
         static_cast<std::uint32_t>(parameter<int>("schema_version", 1));
@@ -137,6 +139,8 @@ public:
         parameter<double>("execution_slowdown_scale", 1.0);
     preflight_settings_.max_retiming_scale =
         parameter<double>("max_retiming_scale", 1.0);
+    preflight_settings_.max_plan_excursion_rad =
+        parameter<double>("max_joint_plan_excursion_rad", 0.30);
     preflight_settings_.motion_limits.max_position_step = read_joint_array(
         "max_joint_step_rad", {0.08, 0.08, 0.08, 0.08, 0.08, 0.08, 0.08});
     preflight_settings_.motion_limits.max_velocity = read_joint_array(
@@ -148,6 +152,10 @@ public:
         parameter<double>("max_measured_joint_velocity_rad_s", 0.25);
     overspeed_guard_samples_ =
         parameter<int>("overspeed_guard_consecutive_samples", 2);
+    controller_stale_feedback_limit_ =
+        parameter<int>("controller_stale_feedback_consecutive_limit", 3);
+    command_publisher_gap_limit_ =
+        parameter<int>("command_publisher_gap_consecutive_limit", 3);
 
     joint_state_topic_ =
         parameter<std::string>("joint_state_topic", "/franka/joint_states");
@@ -171,14 +179,21 @@ public:
         preflight_settings_.execution_slowdown_scale < 1.0 ||
         !std::isfinite(preflight_settings_.max_retiming_scale) ||
         preflight_settings_.max_retiming_scale < 1.0 ||
+        !std::isfinite(preflight_settings_.max_plan_excursion_rad) ||
+        preflight_settings_.max_plan_excursion_rad <= 0.0 ||
         !std::isfinite(max_measured_velocity_rad_s_) ||
         max_measured_velocity_rad_s_ <= 0.0 || overspeed_guard_samples_ < 1 ||
+        controller_stale_feedback_limit_ < 1 ||
+        command_publisher_gap_limit_ < 1 ||
         !std::isfinite(limits_.gripper_min) ||
         !std::isfinite(limits_.gripper_max) ||
         limits_.gripper_min > limits_.gripper_max ||
         !std::isfinite(gripper_max_effort_) || gripper_max_effort_ <= 0.0 ||
         !std::isfinite(gripper_command_deadband_) ||
         gripper_command_deadband_ < 0.0 ||
+        !std::isfinite(gripper_contact_abort_nonfatal_min_position_) ||
+        gripper_contact_abort_nonfatal_min_position_ < limits_.gripper_min ||
+        gripper_contact_abort_nonfatal_min_position_ > limits_.gripper_max ||
         (gripper_actuation_enabled() && !limits_.validate_gripper_range)) {
       throw rclcpp::exceptions::InvalidParametersException(
           "unsafe joint gateway parameters");
@@ -385,7 +400,28 @@ private:
       return;
     }
     if (!message->accepted || !message->applied) {
-      hold_locked("controller rejected/stopped command: " + message->reason);
+      const std::string reason = message->reason;
+      const bool transient_stale = reason == "stale" || reason == "expired" ||
+                                   reason == "deadline_expired";
+      if (transient_stale) {
+        ++controller_stale_feedback_hits_;
+        if (controller_stale_feedback_hits_ <
+            controller_stale_feedback_limit_) {
+          RCLCPP_WARN(
+              get_logger(),
+              "Controller discarded transient stale command (%d/%d): %s; "
+              "waiting for a fresh sequence",
+              controller_stale_feedback_hits_, controller_stale_feedback_limit_,
+              reason.c_str());
+          return;
+        }
+      }
+      hold_locked("controller rejected/stopped command: " + reason +
+                  (transient_stale
+                       ? " (consecutive stale count=" +
+                             std::to_string(controller_stale_feedback_hits_) +
+                             ")"
+                       : ""));
       return;
     }
     if (message->sequence < last_applied_sequence_ ||
@@ -394,6 +430,7 @@ private:
       hold_locked("controller feedback progression mismatch");
       return;
     }
+    controller_stale_feedback_hits_ = 0;
     if (message->sequence > last_applied_sequence_) {
       last_applied_sequence_ = message->sequence;
       last_applied_waypoint_index_ = message->waypoint_index;
@@ -510,6 +547,8 @@ private:
           if (!preflight_only_) {
             execution_ = ExecutablePlan{accepted, current};
             overspeed_hits_ = 0;
+            controller_stale_feedback_hits_ = 0;
+            command_publisher_gap_hits_ = 0;
             last_gripper_waypoint_index_.reset();
             last_command_tick_ = std::chrono::steady_clock::now();
             command_watchdog_active_ = false;
@@ -616,6 +655,8 @@ private:
     plans_.clear();
     command_watchdog_active_ = false;
     overspeed_hits_ = 0;
+    controller_stale_feedback_hits_ = 0;
+    command_publisher_gap_hits_ = 0;
     if (cancel_gripper) {
       cancel_gripper_locked();
     } else {
@@ -691,6 +732,15 @@ private:
                          position);
             return;
           }
+          if (result.code == rclcpp_action::ResultCode::ABORTED &&
+              position >= gripper_contact_abort_nonfatal_min_position_) {
+            RCLCPP_WARN(
+                get_logger(),
+                "Robotiq close goal stopped before target %.4f; treating "
+                "contact/mechanical-limit abort as nonfatal",
+                position);
+            return;
+          }
           std::lock_guard<std::mutex> lock(mutex_);
           if (safety_state_.armed()) {
             hold_locked("Robotiq gripper action failed for target " +
@@ -725,9 +775,22 @@ private:
                              steady_now - last_command_tick_)
                              .count();
         if (gap > publisher_watchdog_ns_) {
-          hold_locked("command publisher watchdog expired: gap=" +
-                      std::to_string(static_cast<double>(gap) / 1e6) + " ms");
-          return;
+          ++command_publisher_gap_hits_;
+          if (command_publisher_gap_hits_ >= command_publisher_gap_limit_) {
+            hold_locked(
+                "command publisher watchdog expired: consecutive gap count=" +
+                std::to_string(command_publisher_gap_hits_) + ", latest gap=" +
+                std::to_string(static_cast<double>(gap) / 1e6) + " ms");
+            return;
+          }
+          RCLCPP_WARN(
+              get_logger(),
+              "Transient command publisher gap (%d/%d): %.3f ms; controller "
+              "holds stale input while Gateway resumes with a fresh sequence",
+              command_publisher_gap_hits_, command_publisher_gap_limit_,
+              static_cast<double>(gap) / 1e6);
+        } else {
+          command_publisher_gap_hits_ = 0;
         }
       }
       last_command_tick_ = steady_now;
@@ -915,9 +978,14 @@ private:
   double max_measured_velocity_rad_s_{0.25};
   int overspeed_guard_samples_{2};
   int overspeed_hits_{0};
+  int controller_stale_feedback_limit_{3};
+  int controller_stale_feedback_hits_{0};
+  int command_publisher_gap_limit_{3};
+  int command_publisher_gap_hits_{0};
   double gripper_max_effort_{16.0};
   double gripper_command_deadband_{0.02};
   std::int64_t gripper_min_command_interval_ns_{150'000'000};
+  double gripper_contact_abort_nonfatal_min_position_{0.5};
   std::string joint_state_topic_;
   std::string chunk_topic_;
   std::string ack_topic_;

@@ -78,6 +78,39 @@ JointPreflightProvider::validate(const JointPlan &plan,
     }
   }
 
+  double max_start_delta = 0.0;
+  double max_step = 0.0;
+  double max_excursion = 0.0;
+  JointArray previous = current_joints;
+  for (std::size_t point = 0; point < plan.waypoints.size(); ++point) {
+    for (std::size_t joint = 0; joint < current_joints.size(); ++joint) {
+      if (point == 0) {
+        max_start_delta =
+            std::max(max_start_delta, std::abs(plan.waypoints[point][joint] -
+                                               current_joints[joint]));
+      }
+      max_step = std::max(
+          max_step, std::abs(plan.waypoints[point][joint] - previous[joint]));
+      max_excursion =
+          std::max(max_excursion, std::abs(plan.waypoints[point][joint] -
+                                           current_joints[joint]));
+    }
+    previous = plan.waypoints[point];
+  }
+  double final_delta = 0.0;
+  for (std::size_t joint = 0; joint < current_joints.size(); ++joint) {
+    final_delta = std::max(final_delta, std::abs(plan.waypoints.back()[joint] -
+                                                 current_joints[joint]));
+  }
+  if (max_excursion > settings_.max_plan_excursion_rad) {
+    result.failure_code = ResultCode::kRejectedJointMotion;
+    result.detail = "plan excursion " + std::to_string(max_excursion) +
+                    " rad exceeds limit " +
+                    std::to_string(settings_.max_plan_excursion_rad) +
+                    " rad relative to the measured start state";
+    return result;
+  }
+
   const long double scaled_period = static_cast<long double>(plan.period_ns) *
                                     settings_.execution_slowdown_scale;
   if (!std::isfinite(scaled_period) ||
@@ -109,7 +142,11 @@ JointPreflightProvider::validate(const JointPlan &plan,
       std::to_string(plan.period_ns) + " ns, forced slowdown=" +
       std::to_string(settings_.execution_slowdown_scale) +
       "x, effective period=" + std::to_string(timing.period_ns) + " ns" +
-      (timing.period_ns > base_period_ns ? " (motion-limit retimed)" : "");
+      (timing.period_ns > base_period_ns ? " (motion-limit retimed)" : "") +
+      ", max_start_delta=" + std::to_string(max_start_delta) +
+      " rad, max_step=" + std::to_string(max_step) +
+      " rad, max_excursion=" + std::to_string(max_excursion) +
+      " rad, final_delta=" + std::to_string(final_delta) + " rad";
   return result;
 }
 

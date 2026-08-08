@@ -30,18 +30,34 @@ set -u
 
 export PYTHONPATH="$REPO_ROOT/franka_project/ros_lerobot/src${PYTHONPATH:+:$PYTHONPATH}"
 
-TOPIC_INFO="$(ros2 topic info /lerobot/franka/joint_action_chunk 2>/dev/null || true)"
+TOPIC_INFO="$(
+  ros2 topic info /lerobot/franka/joint_action_chunk --verbose 2>/dev/null || true
+)"
 if [[ "$TOPIC_INFO" != *"lerobot_franka_interfaces/msg/JointActionChunk"* ]]; then
-  echo "ERROR: q-pos Joint Gateway is not the unique action subscriber"
+  echo "ERROR: q-pos Joint Gateway action topic has the wrong type or is unavailable"
   echo "$TOPIC_INFO"
   echo "Start it first: bash franka_project/scripts/start_joint_stack.sh --execute --cam"
   exit 1
 fi
-if [[ "$TOPIC_INFO" != *"Subscription count: 1"* ]]; then
-  echo "ERROR: q-pos Joint Gateway is not the unique action subscriber"
+
+GATEWAY_SUBSCRIBERS="$(
+  awk '$1 == "Node" && $2 == "name:" && $3 == "franka_joint_safety_gateway" {
+         count += 1
+       }
+       END { print count + 0 }' <<<"$TOPIC_INFO"
+)"
+if [[ "$GATEWAY_SUBSCRIBERS" != "1" ]]; then
+  echo "ERROR: expected exactly one franka_joint_safety_gateway subscriber"
   echo "$TOPIC_INFO"
   echo "Start it first: bash franka_project/scripts/start_joint_stack.sh --execute --cam"
   exit 1
+fi
+
+TOTAL_SUBSCRIBERS="$(
+  awk '$1 == "Subscription" && $2 == "count:" {print $3; exit}' <<<"$TOPIC_INFO"
+)"
+if [[ -n "$TOTAL_SUBSCRIBERS" && "$TOTAL_SUBSCRIBERS" -gt 1 ]]; then
+  echo "INFO: allowing $((TOTAL_SUBSCRIBERS - 1)) read-only action observer(s)"
 fi
 
 cd "$REPO_ROOT"
@@ -54,6 +70,8 @@ python -m lerobot_robot_franka_ros.joint_ros2_client \
   --robot.qpos_max_skew_s=0.2 \
   --robot.gripper_max_skew_s=0.1 \
   --robot.observation_buffer_size=64 \
+  --robot.gripper_model_open_high=true \
+  --robot.gripper_model_open_position=0.944 \
   --robot.action_chunk_validity_s=1.0 \
   --robot.action_execution_timeout_s=120 \
   --server_address="$SERVER_ADDRESS" \
@@ -63,7 +81,7 @@ python -m lerobot_robot_franka_ros.joint_ros2_client \
   --actions_per_chunk=32 \
   --chunk_size_threshold=0.0 \
   --enable_pending_observation=true \
-  --pending_observation_timeout_s=120 \
+  --pending_observation_timeout_s=15 \
   --aggregate_fn_name=latest_only \
   --client_device=cpu \
   --fps=30 \

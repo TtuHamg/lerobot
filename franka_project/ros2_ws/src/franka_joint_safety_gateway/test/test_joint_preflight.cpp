@@ -131,3 +131,22 @@ TEST(JointPreflight, AcceptsProjectsStyleStepToleranceButStillRetimesSpeed) {
   EXPECT_FALSE(result.accepted);
   EXPECT_NE(result.detail.find("position step"), std::string::npos);
 }
+
+TEST(JointPreflight, RejectsLargeCumulativeExcursionMadeOfSmallSteps) {
+  auto settings = conservative_settings();
+  settings.max_plan_excursion_rad = 0.30;
+  settings.motion_limits.max_position_step.fill(0.065);
+  gateway::JointPreflightProvider provider(settings);
+
+  gateway::JointPlan plan;
+  plan.period_ns = 100'000'000;
+  plan.waypoints.resize(31, current_joints());
+  for (std::size_t point = 0; point < plan.waypoints.size(); ++point) {
+    plan.waypoints[point][3] -= 0.01 * static_cast<double>(point + 1);
+  }
+
+  const auto result = provider.validate(plan, current_joints());
+
+  EXPECT_FALSE(result.accepted);
+  EXPECT_NE(result.detail.find("plan excursion"), std::string::npos);
+}

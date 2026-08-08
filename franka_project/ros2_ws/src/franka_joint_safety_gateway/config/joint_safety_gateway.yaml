@@ -29,41 +29,54 @@ franka_joint_safety_gateway:
     safety_feedback_topic: /franka/safety_command_feedback
     feedback_status_timeout_s: 0.10
 
-    # FastWAM action[7] is the Robotiq knuckle position: 0.0=open, 0.8=closed.
+    # Command range: 0.0=open, 0.8=closed. The measured position may stop below
+    # 0.8 on object contact; keep commanding closed to maintain grasp force.
     # Real execution requires the action server to be present before ARM.
     execute_gripper: true
     gripper_action_name: /gripper/robotiq_gripper_controller/gripper_cmd
     validate_gripper_range: true
     gripper_min: 0.0
     gripper_max: 0.8
-    gripper_max_effort: 16.0
+    gripper_max_effort: 20.0
     # Avoid flooding/preempting the action server from the 200 Hz arm loop.
     gripper_command_deadband: 0.02
     gripper_min_command_interval_s: 0.15
+    # A blocked close goal normally means object contact. Opening-side aborts
+    # remain fatal; close-side ABORTED results above this target only warn.
+    gripper_contact_abort_nonfatal_min_position: 0.5
 
     # Joint-space checks only. No MoveIt model, Jacobian, self-collision, or
     # environment collision is used.
     joint_position_margin_rad: 0.03
 
-    # Zhouyan-style conservative first deployment: every plan is forced to at
-    # least 3x the model period, then slowed further if a limit still requires it.
-    execution_slowdown_scale: 3.0
+    # Match Zhouyan's native-joint deployment baseline: start at half speed,
+    # then slow further if a motion limit still requires it.
+    execution_slowdown_scale: 2.0
     # Projects/lerobot uses 0.06 rad. Keep 0.005 rad numeric/model tolerance
     # while velocity and acceleration remain independently constrained.
     max_joint_step_rad: [0.065, 0.065, 0.065, 0.065, 0.065, 0.065, 0.065]
-    max_joint_velocity_rad_s: [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.15]
-    max_joint_acceleration_rad_s2: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    # Permit the model's observed 0.61-0.77 rad reach horizons; velocity,
+    # acceleration, per-step and measured-overspeed gates remain independent.
+    max_joint_plan_excursion_rad: 0.80
+    max_joint_velocity_rad_s: [0.30, 0.30, 0.30, 0.30, 0.30, 0.30, 0.30]
+    max_joint_acceleration_rad_s2: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     # Retiming may slow the complete plan by at most this factor.
     max_retiming_scale: 8.0
     max_preflight_state_drift_rad: 0.01
     # Two consecutive 30 Hz measured-velocity violations immediately HOLD and
     # clear the active plan. This is independent of model/action timing.
-    max_measured_joint_velocity_rad_s: 0.25
+    max_measured_joint_velocity_rad_s: 0.55
     overspeed_guard_consecutive_samples: 2
+    # Match Zhouyan: tolerate isolated stale/expired feedback; a fresh applied
+    # sequence resets the counter, while three consecutive stale results HOLD.
+    controller_stale_feedback_consecutive_limit: 3
 
     command_period_ms: 10
     command_deadline_s: 0.100
     publisher_watchdog_s: 0.100
+    # Match stale-feedback handling: isolated host jitter only warns; three
+    # consecutive >100 ms command-timer gaps HOLD.
+    command_publisher_gap_consecutive_limit: 3
     settle_window_s: 0.25
 
     require_command_subscriber: true

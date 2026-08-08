@@ -15,6 +15,7 @@ set -u
 
 echo "Waiting up to 120 seconds for the Joint Gateway..."
 STACK_READY=false
+ALREADY_ARMED=false
 DEADLINE=$((SECONDS + 120))
 STATUS=""
 while ((SECONDS < DEADLINE)); do
@@ -23,12 +24,17 @@ while ((SECONDS < DEADLINE)); do
       2>/dev/null || true
   )"
   STACK_READY=true
-  for gate in "armed: false" "state_fresh: true" "preflight_available: true"; do
+  for gate in "state_fresh: true" "preflight_available: true"; do
     if [[ "$STATUS" != *"$gate"* ]]; then
       STACK_READY=false
       break
     fi
   done
+  if [[ "$STATUS" == *"armed: true"* ]]; then
+    ALREADY_ARMED=true
+  elif [[ "$STATUS" != *"armed: false"* ]]; then
+    STACK_READY=false
+  fi
   if [[ "$STACK_READY" == "true" ]]; then
     break
   fi
@@ -57,6 +63,11 @@ if [[ "$CONTROLLER_READY" != "true" ]]; then
   echo "ERROR: joint_impedance_ik_controller is not active"
   echo "$CONTROLLERS"
   exit 1
+fi
+
+if [[ "$ALREADY_ARMED" == "true" ]]; then
+  echo "Gateway is already ARMED; no service call is needed"
+  exit 0
 fi
 
 echo "ARM will allow immediate model-driven robot motion when the client connects."

@@ -26,6 +26,8 @@ from lerobot_robot_franka_ros import (  # noqa: E402
 from lerobot_robot_franka_ros.joint_ros2_runtime import (  # noqa: E402
     JointRos2RuntimeStateError,
     _clamp_continuous_gripper_commands,
+    _open_high_gripper_commands_to_physical,
+    _physical_gripper_to_open_high,
 )
 
 
@@ -221,6 +223,8 @@ def test_non_dry_run_only_allows_isolated_ros2_interface(tmp_path: Path) -> None
             {"gripper_command_min_position": 0.8, "gripper_command_max_position": 0.8},
             "minimum must be less than maximum",
         ),
+        ({"gripper_model_open_high": 1}, "must be bool"),
+        ({"gripper_model_open_position": float("nan")}, "finite and greater than zero"),
     ],
 )
 def test_ros2_config_rejects_non_finite_or_boolean_numeric_values(
@@ -261,6 +265,45 @@ def test_continuous_gripper_commands_saturate_out_of_range_values() -> None:
     assert forwarded == pytest.approx([0.0, 0.000392, 0.8])
     assert raw_min == pytest.approx(-0.006074)
     assert raw_max == pytest.approx(0.9)
+    assert clamped_count == 2
+
+
+def test_0804_open_high_gripper_conversion_is_bidirectional() -> None:
+    assert _physical_gripper_to_open_high(
+        0.0,
+        hardware_minimum=0.0,
+        hardware_maximum=0.8,
+        model_open_position=0.944,
+    ) == pytest.approx(0.944)
+    assert _physical_gripper_to_open_high(
+        0.8,
+        hardware_minimum=0.0,
+        hardware_maximum=0.8,
+        model_open_position=0.944,
+    ) == pytest.approx(0.0)
+
+    physical, raw_min, raw_max, clamped_count = (
+        _open_high_gripper_commands_to_physical(
+            [0.944, 0.472, 0.0],
+            hardware_minimum=0.0,
+            hardware_maximum=0.8,
+            model_open_position=0.944,
+        )
+    )
+    assert physical == pytest.approx([0.0, 0.4, 0.8])
+    assert raw_min == pytest.approx(0.0)
+    assert raw_max == pytest.approx(0.944)
+    assert clamped_count == 0
+
+
+def test_0804_open_high_gripper_targets_saturate_before_conversion() -> None:
+    physical, _, _, clamped_count = _open_high_gripper_commands_to_physical(
+        [-0.1, 1.0],
+        hardware_minimum=0.0,
+        hardware_maximum=0.8,
+        model_open_position=0.944,
+    )
+    assert physical == pytest.approx([0.8, 0.0])
     assert clamped_count == 2
 
 

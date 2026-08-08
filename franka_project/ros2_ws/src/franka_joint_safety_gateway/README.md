@@ -8,7 +8,10 @@ slowing it down, and publishes controller-authorized `SafeJointCommand` at
 
 The installed defaults are `enabled=false`, `shadow=true`; they cannot actuate.
 In execute mode the eighth model value is range-checked and sent to the Robotiq
-gripper action server.
+gripper action server. The command range is 0.0=open to 0.8=closed with effort
+20. An ABORTED close goal at or above 0.5 is treated as nonfatal object contact
+while the final close target remains commanded; opening-side failures still
+HOLD.
 
 ## Low-speed joint safety boundary
 
@@ -17,12 +20,15 @@ self-collision, environment collision, or Jacobian singularity. It requires a
 fresh measured joint state while arming and while accepting each plan so the
 first segment is checked from the real start pose.
 
-Every plan is forced to at least 3x its model period, then retimed further when
-needed to satisfy a 0.065 rad step, 0.15 rad/s velocity, and 0.5 rad/s²
-acceleration envelope. Two consecutive 30 Hz samples above 0.25 rad/s,
-joint-state loss, controller rejection, timer discontinuity, or endpoint loss
-immediately HOLD and clear the active plan. The 1 kHz controller independently
-limits target slew to 0.15 rad/s.
+Every plan is forced to at least 2x its model period, then retimed further when
+needed to satisfy a 0.065 rad step, 0.30 rad/s velocity, 1.0 rad/s²
+acceleration, and 0.80 rad total excursion envelope. Two consecutive 30 Hz
+samples above 0.55 rad/s,
+joint-state loss, non-stale controller rejection, or endpoint loss immediately
+HOLD and clear the active plan. Isolated stale/expired feedback and command
+timer gaps only warn; a fresh feedback/normal timer tick resets its respective
+counter, and three consecutive failures HOLD. The 1 kHz controller
+independently limits target slew to 0.35 rad/s.
 
 This still does not prevent a slow collision with a box, table, camera, or the
 robot itself. Operators must clear the workspace and keep the physical e-stop

@@ -252,7 +252,7 @@ echo "Logs         : $LOG_DIR"
 echo "FCI CPU      : $FCI_CPU_AFFINITY (Franka NIC IRQs: CPU8)"
 echo "Gateway CPU  : $GATEWAY_CPU_AFFINITY"
 echo "qpos relay CPU: $QPOS_RELAY_CPU_AFFINITY"
-echo "Safety mode  : 3x slowdown; 0.15 rad/s; measured overspeed HOLD; no collision model"
+echo "Safety mode  : 2x, 0.30 rad/s, 1.0 rad/s², 0.80 rad/chunk; no collision model"
 echo
 if [[ "$MODE" == "shadow" ]]; then
   echo "SHADOW cannot actuate. Start the client, then inspect ACK/status."
