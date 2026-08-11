@@ -164,10 +164,14 @@ def send_once(
             observation=observation,
             must_go=True,
         )
+        request_started_monotonic = time.monotonic()
+        request_started_wall_s = time.time()
         if not client.send_observation(request):
             raise RuntimeError("the single fixture observation was not accepted by SendObservations")
 
         response = client.stub.GetActions(services_pb2.Empty(), timeout=timeout_s)
+        response_received_wall_s = time.time()
+        inference_roundtrip_s = time.monotonic() - request_started_monotonic
         if not response.data:
             raise RuntimeError("server returned an empty action delivery")
         timed_actions = pickle.loads(response.data)  # nosec: trusted project policy server
@@ -214,6 +218,10 @@ def send_once(
             "request_id": str(response.request_id),
             "chunk_id": str(response.chunk_id),
             "source_timestep": int(response.source_timestep),
+            "request_started_wall_s": request_started_wall_s,
+            "response_received_wall_s": response_received_wall_s,
+            "inference_roundtrip_s": inference_roundtrip_s,
+            "server_send_timestamp_s": float(timed_actions[0].server_send_timestamp),
             "actions_executed": False,
             "actions": action_records,
         }

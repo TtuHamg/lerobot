@@ -98,6 +98,21 @@ class PolicyServerConfig:
             "Requires fastwam_joint_video_inference=true."
         },
     )
+    fastwam_action_gripper_encoding: str = field(
+        default="open_0_1",
+        metadata={
+            "help": "Physical meaning of FastWAM action dimension 7 before conversion to the "
+            "canonical client closed_0_1 contract: 'open_0_1' or 'closed_0_1'."
+        },
+    )
+    fastwam_state_gripper_encoding: str = field(
+        default="open_0_1",
+        metadata={
+            "help": "Physical meaning of FastWAM's pseudo-finger magnitude after converting the "
+            "canonical client closed_0_1 state: 'open_0_1' for correctly calibrated datasets or "
+            "'closed_0_1' for checkpoints trained with inverted raw gripper endpoints."
+        },
+    )
 
     def __post_init__(self):
         """Validate configuration after initialization."""
@@ -133,6 +148,16 @@ class PolicyServerConfig:
 
         if self.fastwam_joint_video_output_dir == "":
             raise ValueError("fastwam_joint_video_output_dir cannot be empty")
+        if self.fastwam_action_gripper_encoding not in ("open_0_1", "closed_0_1"):
+            raise ValueError(
+                "fastwam_action_gripper_encoding must be 'open_0_1' or 'closed_0_1', "
+                f"got {self.fastwam_action_gripper_encoding!r}"
+            )
+        if self.fastwam_state_gripper_encoding not in ("open_0_1", "closed_0_1"):
+            raise ValueError(
+                "fastwam_state_gripper_encoding must be 'open_0_1' or 'closed_0_1', "
+                f"got {self.fastwam_state_gripper_encoding!r}"
+            )
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "PolicyServerConfig":
@@ -159,6 +184,8 @@ class PolicyServerConfig:
             "policy_device": self.policy_device,
             "fastwam_joint_video_inference": self.fastwam_joint_video_inference,
             "fastwam_joint_video_output_dir": self.fastwam_joint_video_output_dir,
+            "fastwam_action_gripper_encoding": self.fastwam_action_gripper_encoding,
+            "fastwam_state_gripper_encoding": self.fastwam_state_gripper_encoding,
         }
 
 
@@ -300,9 +327,7 @@ class RobotClientConfig:
                 f"pending_observation_timeout_s must be positive, got {self.pending_observation_timeout_s}"
             )
         if self.gateway_arm_timeout_s <= 0:
-            raise ValueError(
-                f"gateway_arm_timeout_s must be positive, got {self.gateway_arm_timeout_s}"
-            )
+            raise ValueError(f"gateway_arm_timeout_s must be positive, got {self.gateway_arm_timeout_s}")
 
         if self.observation_trigger_mode not in OBSERVATION_TRIGGER_MODES:
             raise ValueError(

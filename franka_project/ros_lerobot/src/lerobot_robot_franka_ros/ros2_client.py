@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass, field, replace
 from pprint import pformat
 
 import draccus
-
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.helpers import TimedAction, visualize_action_queue_size
 from lerobot.async_inference.robot_client import RobotClient
@@ -17,7 +16,7 @@ from .config_franka_ros import FrankaRosConfig
 from .contract import FASTWAM_RENAME_MAP, FRANKA_POLICY_TYPES, PI0_RENAME_MAP
 from .franka_ros import FrankaRos
 from .visualization_launcher import ActionVisualizationLauncher, ActionVisualizationLaunchSpec
-
+from .web_dashboard_launcher import WebDashboardLauncher, WebDashboardLaunchSpec
 
 _FASTWAM_SENSOR_CONTRACT = {
     "camera1_topic": "/camera1/camera1/color/image_raw",
@@ -78,9 +77,27 @@ class FrankaRos2ClientConfig(RobotClientConfig):
     )
     visualization_launch_rviz: bool = field(
         default=True,
-        metadata={
-            "help": "Also launch RViz when visualize_action=true; false runs only the marker node."
-        },
+        metadata={"help": "Also launch RViz when visualize_action=true; false runs only the marker node."},
+    )
+    visualize_action_web: bool = field(
+        default=False,
+        metadata={"help": "Launch the low-load local Franka web dashboard with this client."},
+    )
+    web_dashboard_port: int = field(
+        default=8768,
+        metadata={"help": "Localhost port used by the optional Franka web dashboard."},
+    )
+    web_dashboard_history_seconds: float = field(
+        default=60.0,
+        metadata={"help": "Maximum rolling history retained by the web dashboard."},
+    )
+    web_dashboard_camera_fps: float = field(
+        default=3.0,
+        metadata={"help": "Thumbnail FPS when a web-dashboard camera is explicitly enabled."},
+    )
+    web_dashboard_open_browser: bool = field(
+        default=True,
+        metadata={"help": "Open the web dashboard in the local desktop browser after startup."},
     )
 
     def __post_init__(self) -> None:
@@ -89,6 +106,18 @@ class FrankaRos2ClientConfig(RobotClientConfig):
             raise ValueError("visualize_action must be a bool")
         if not isinstance(self.visualization_launch_rviz, bool):
             raise ValueError("visualization_launch_rviz must be a bool")
+        if not isinstance(self.visualize_action_web, bool):
+            raise ValueError("visualize_action_web must be a bool")
+        if self.visualize_action and self.visualize_action_web:
+            raise ValueError("visualize_action and visualize_action_web are mutually exclusive")
+        if not isinstance(self.web_dashboard_port, int) or not 1 <= self.web_dashboard_port <= 65535:
+            raise ValueError("web_dashboard_port must be an integer in [1, 65535]")
+        if not 1.0 <= float(self.web_dashboard_history_seconds) <= 600.0:
+            raise ValueError("web_dashboard_history_seconds must be in [1, 600]")
+        if not 0.1 <= float(self.web_dashboard_camera_fps) <= 10.0:
+            raise ValueError("web_dashboard_camera_fps must be in [0.1, 10]")
+        if not isinstance(self.web_dashboard_open_browser, bool):
+            raise ValueError("web_dashboard_open_browser must be a bool")
 
 
 def _make_action_visualization_launcher(
@@ -112,6 +141,35 @@ def _make_action_visualization_launcher(
     )
 
 
+def _make_web_dashboard_launcher(
+    config: FrankaRos2ClientConfig,
+    *,
+    logger: logging.Logger,
+) -> WebDashboardLauncher:
+    robot = config.robot
+    if not isinstance(robot, FrankaRosConfig):
+        raise TypeError("Web dashboard requires robot.type=franka_ros")
+    return WebDashboardLauncher(
+        WebDashboardLaunchSpec(
+            host="127.0.0.1",
+            port=config.web_dashboard_port,
+            history_seconds=config.web_dashboard_history_seconds,
+            camera_fps=config.web_dashboard_camera_fps,
+            open_browser=config.web_dashboard_open_browser,
+            default_pose_frame=robot.policy_eef_frame,
+            action_chunk_topic=robot.action_chunk_topic,
+            ack_topic="/lerobot/franka/action_chunk_ack",
+            ik_topic="/lerobot/franka/ik_joint_action_chunk",
+            status_topic="/lerobot/franka/safety_gateway_status",
+            current_pose_topic=robot.eef_pose_topic,
+            robot_state_topic=robot.robot_state_topic,
+            camera1_topic=robot.camera1_topic,
+            camera2_topic=robot.camera2_topic,
+        ),
+        logger=logger,
+    )
+
+
 def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClientConfig:
     """Resolve the policy-specific camera wire profile without changing robot semantics."""
 
@@ -119,8 +177,7 @@ def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClien
         raise TypeError("FrankaRos2RobotClient requires robot.type=franka_ros")
     if config.policy_type not in FRANKA_POLICY_TYPES:
         raise ValueError(
-            f"Franka ROS2 client requires policy_type in {FRANKA_POLICY_TYPES}, "
-            f"got {config.policy_type!r}"
+            f"Franka ROS2 client requires policy_type in {FRANKA_POLICY_TYPES}, got {config.policy_type!r}"
         )
     if config.action_offset != 1:
         raise ValueError(
@@ -154,27 +211,21 @@ def resolve_franka_client_policy_config(config: RobotClientConfig) -> RobotClien
                     f"The selected FastWAM checkpoint requires robot.{field_name}="
                     f"{expected_value!r}, got {actual_value!r}"
                 )
-        calibration_matches = math.isclose(
-            float(robot.gripper_open_position), 0.0, rel_tol=0.0, abs_tol=1e-12
-        ) and math.isclose(
-            float(robot.gripper_closed_position), 0.8, rel_tol=0.0, abs_tol=1e-12
-        )
-        if not calibration_matches:
-            raise ValueError(
-                "The selected FastWAM checkpoint requires gripper_open_position=0.0 "
-                "and gripper_closed_position=0.8; confirm the live joint units before deployment"
-            )
         if robot.gripper_max_skew_s > 0.01:
-            raise ValueError(
-                "The selected FastWAM checkpoint requires gripper_max_skew_s <= 0.01"
-            )
+            raise ValueError("The selected FastWAM checkpoint requires gripper_max_skew_s <= 0.01")
         if robot.camera2_max_skew_s > 0.1:
-            raise ValueError(
-                "The selected FastWAM checkpoint requires camera2_max_skew_s <= 0.1"
-            )
+            raise ValueError("The selected FastWAM checkpoint requires camera2_max_skew_s <= 0.1")
         if robot.eef_max_skew_s > 0.05:
+            raise ValueError("The selected FastWAM checkpoint requires eef_max_skew_s <= 0.05")
+        if (
+            robot.max_action_chunk_waypoints is not None
+            and config.actions_per_chunk is not None
+            and robot.max_action_chunk_waypoints < config.actions_per_chunk
+        ):
             raise ValueError(
-                "The selected FastWAM checkpoint requires eef_max_skew_s <= 0.05"
+                "FastWAM deployment must preserve the complete action horizon: "
+                f"robot.max_action_chunk_waypoints={robot.max_action_chunk_waypoints}, "
+                f"actions_per_chunk={config.actions_per_chunk}"
             )
     return replace(config, rename_map=dict(expected_map))
 
@@ -300,6 +351,8 @@ class FrankaRos2RobotClient(RobotClient):
         task, generation, _ = controller.snapshot()
         if task is None:
             raise RuntimeError("Select a task before arming the gateway")
+        self.discard_pending_work()
+        self.robot.set_gateway_armed(False, timeout_s=self.config.gateway_arm_timeout_s)
         self.robot.set_gateway_armed(True, timeout_s=self.config.gateway_arm_timeout_s)
         result = controller.arm()
         self.must_go.set()
@@ -311,9 +364,10 @@ class FrankaRos2RobotClient(RobotClient):
         if controller is None:
             return
         tasks = controller.allowed_tasks
-        self.logger.info("Task keys: %s | s=stop a=arm h=help q=quit", " ".join(
-            f"{index + 1}={task!r}" for index, task in enumerate(tasks)
-        ))
+        self.logger.info(
+            "Task keys: %s | s=stop a=arm h=help q=quit",
+            " ".join(f"{index + 1}={task!r}" for index, task in enumerate(tasks)),
+        )
         while self.running:
             try:
                 command = input("task> ").strip().lower()
@@ -324,9 +378,10 @@ class FrankaRos2RobotClient(RobotClient):
                 elif command == "a":
                     self.arm_selected_task()
                 elif command == "h":
-                    self.logger.info("Task keys: %s | s=stop a=arm h=help q=quit", " ".join(
-                        f"{index + 1}={task!r}" for index, task in enumerate(tasks)
-                    ))
+                    self.logger.info(
+                        "Task keys: %s | s=stop a=arm h=help q=quit",
+                        " ".join(f"{index + 1}={task!r}" for index, task in enumerate(tasks)),
+                    )
                 elif command == "q":
                     self.stop_task()
                     self.shutdown_event.set()
@@ -353,9 +408,7 @@ class FrankaRos2RobotClient(RobotClient):
 
         with self.latest_action_lock:
             latest_action = self.latest_action
-        fresh_actions = [
-            action for action in incoming_actions if action.get_timestep() > latest_action
-        ]
+        fresh_actions = [action for action in incoming_actions if action.get_timestep() > latest_action]
         limit = self.config.robot.max_action_chunk_waypoints
         accepted_actions = fresh_actions if limit is None else fresh_actions[:limit]
         # Every action in a server chunk is timed from the observation used for
@@ -405,6 +458,7 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
         return
 
     visualization_launcher: ActionVisualizationLauncher | None = None
+    web_dashboard_launcher: WebDashboardLauncher | None = None
     action_receiver_thread: threading.Thread | None = None
     keyboard_thread: threading.Thread | None = None
     try:
@@ -414,6 +468,12 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
                 logger=client.logger,
             )
             visualization_launcher.start()
+        if cfg.visualize_action_web:
+            web_dashboard_launcher = _make_web_dashboard_launcher(
+                cfg,
+                logger=client.logger,
+            )
+            web_dashboard_launcher.start()
 
         client.logger.info("Starting action receiver thread with ROS2 chunk publication")
         action_receiver_thread = threading.Thread(
@@ -441,6 +501,11 @@ def ros2_async_client(cfg: FrankaRos2ClientConfig) -> None:
                         visualization_launcher.stop()
                     except Exception:
                         client.logger.exception("Failed to fully stop action visualization")
+                if web_dashboard_launcher is not None:
+                    try:
+                        web_dashboard_launcher.stop()
+                    except Exception:
+                        client.logger.exception("Failed to fully stop web dashboard")
             finally:
                 if action_receiver_thread is not None:
                     action_receiver_thread.join()

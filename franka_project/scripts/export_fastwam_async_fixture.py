@@ -34,7 +34,12 @@ PROJECT_SRC = PROJECT_ROOT / "src"
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from franka_eef_pipeline.geometry import rotation_6d_to_matrix, so3_log  # noqa: E402
+from franka_eef_pipeline.geometry import (  # noqa: E402
+    matrix_to_quaternion_xyzw,
+    rotation_6d_to_matrix,
+    so3_exp,
+    so3_log,
+)
 
 DEFAULT_FASTWAM_ROOT = PROJECT_ROOT.parent.parent / "FastWAM"
 DEFAULT_OUTPUT = PROJECT_ROOT / "fixtures/async/fastwam_grab_cups_observation_v1.npz"
@@ -132,29 +137,58 @@ def _validate_source_contract(
     dataset_contract: dict[str, Any],
     info: dict[str, Any],
 ) -> None:
-    camera_configs = [
-        {
-            "name": "camera1",
-            "topic": "/camera1/camera1/color/image_raw",
-            "message_type": "sensor_msgs/msg/Image",
-            "expected_encoding": "rgb8",
-            "expected_height": 480,
-            "expected_width": 640,
-        },
-        {
-            "name": "camera2",
-            "topic": "/camera2/camera2/color/image_raw",
-            "message_type": "sensor_msgs/msg/Image",
-            "expected_encoding": "rgb8",
-            "expected_height": 480,
-            "expected_width": 640,
-        },
-    ]
+    profile_name = profile.get("name")
+    if not isinstance(profile_name, str) or not profile_name:
+        raise ValueError("resolved FastWAM dataset profile has no dataset name")
+    streams = profile.get("streams")
+    if not isinstance(streams, dict):
+        raise ValueError("resolved FastWAM dataset profile has no streams object")
+    camera_configs = streams.get("cameras")
+    if not isinstance(camera_configs, list) or len(camera_configs) != len(CAMERA_NAMES):
+        raise ValueError("resolved FastWAM dataset profile must contain exactly two cameras")
+    if [camera.get("name") for camera in camera_configs if isinstance(camera, dict)] != list(CAMERA_NAMES):
+        raise ValueError("resolved FastWAM camera names/order must be camera1,camera2")
+    canonical_topics = {
+        "/camera1/camera1/color/image_raw",
+        "/camera2/camera2/color/image_raw",
+    }
+    actual_topics: list[str] = []
+    for index, camera in enumerate(camera_configs):
+        _require_subset(
+            camera,
+            {
+                "name": CAMERA_NAMES[index],
+                "message_type": "sensor_msgs/msg/Image",
+                "expected_encoding": "rgb8",
+                "expected_height": WIRE_CAMERA_SHAPE[0],
+                "expected_width": WIRE_CAMERA_SHAPE[1],
+            },
+            where=f"resolved FastWAM camera {index}",
+        )
+        topic = camera.get("topic")
+        if not isinstance(topic, str):
+            raise ValueError(f"resolved FastWAM camera {index} has no topic")
+        actual_topics.append(topic)
+    if set(actual_topics) != canonical_topics or len(set(actual_topics)) != len(CAMERA_NAMES):
+        raise ValueError(
+            "resolved FastWAM physical camera topics must be a one-to-one mapping of "
+            f"{sorted(canonical_topics)}, got {actual_topics}"
+        )
+    profile_task = profile.get("task")
+    if not isinstance(profile_task, dict):
+        raise ValueError("resolved FastWAM dataset profile has no task contract")
+    default_task = profile_task.get("default_instruction")
+    manifest_field = profile_task.get("manifest_field")
+    default_is_placeholder = isinstance(default_task, str) and default_task.startswith("__MISSING_")
+    if default_is_placeholder and not isinstance(manifest_field, str):
+        raise ValueError("multi-task FastWAM profile must declare task.manifest_field")
+    if not default_is_placeholder and (not isinstance(default_task, str) or not default_task):
+        raise ValueError("single-task FastWAM profile must declare task.default_instruction")
+
     _require_subset(
         profile,
         {
             "schema_version": 1,
-            "name": "franka_eef_grab_cups_v2",
             "adapter": "native_franka_mcap_v1",
             "streams": {
                 "timestamp_source": "log_time",
@@ -209,23 +243,24 @@ def _validate_source_contract(
                 "width": TRAINING_CAMERA_SHAPE[1],
                 "fill_rgb": [0, 0, 0],
             },
-            "task": {
-                "default_instruction": "grab the paper cup.",
-                "manifest_field": None,
-            },
+            "task": profile_task,
             "output": {
-                "repo_id": "local/franka_eef_grab_cup_v2",
                 "robot_type": "franka_fr3_cartesian_eef",
             },
         },
         where="resolved FastWAM dataset profile",
     )
 
+    contract_task = dataset_contract.get("task")
+    if contract_task != profile_task:
+        raise ValueError(
+            f"FastWAM profile/dataset task contracts differ: profile={profile_task}, dataset={contract_task}"
+        )
     _require_subset(
         dataset_contract,
         {
             "schema_version": 1,
-            "dataset_name": "franka_eef_grab_cups_v2",
+            "dataset_name": profile_name,
             "format": {"name": "lerobot", "codebase_version": "v2.1"},
             "representation": {
                 "state": {
@@ -241,7 +276,6 @@ def _validate_source_contract(
                     "dim": 7,
                     "names": list(TRAINING_ACTION_NAMES),
                     "type": "adjacent_delta_eef",
-                    "gripper": "absolute next target; 0=closed, 1=open",
                 },
                 "gripper_calibration": {
                     "raw_open": 0.0,
@@ -265,10 +299,31 @@ def _validate_source_contract(
                 "ordered_camera_names": list(CAMERA_NAMES),
             },
             "alignment": {"strategy": "latest_not_after", "crop_common_interval": True},
-            "task": {"default_instruction": "grab the paper cup.", "manifest_field": None},
+            "task": profile_task,
         },
         where="FastWAM dataset contract",
     )
+    contract_cameras = dataset_contract.get("cameras")
+    if contract_cameras is not None:
+        expected_cameras = [
+            {
+                "name": name,
+                "key": f"observation.images.{name}",
+                "topic": camera_configs[index]["topic"],
+                "order": index,
+            }
+            for index, name in enumerate(CAMERA_NAMES)
+        ]
+        actual_cameras = [
+            {key: camera.get(key) for key in ("name", "key", "topic", "order")}
+            for camera in contract_cameras
+            if isinstance(camera, dict)
+        ]
+        if actual_cameras != expected_cameras:
+            raise ValueError(
+                f"FastWAM profile/dataset camera mappings differ: expected={expected_cameras}, "
+                f"actual={actual_cameras}"
+            )
 
     _require_subset(
         info,
@@ -395,6 +450,56 @@ def _wire_to_fastwam_state(
     return np.concatenate((state[:3], so3_log(rotation), fingers))
 
 
+def _verify_adjacent_action_window(
+    state_window: np.ndarray,
+    action_window: np.ndarray,
+    *,
+    finger_scale: float,
+    finger_signs: tuple[float, float],
+) -> tuple[float, np.ndarray]:
+    """Verify adjacent-delta labels and return their absolute8 target trajectory."""
+
+    states = np.asarray(state_window, dtype=np.float64)
+    actions = np.asarray(action_window, dtype=np.float64)
+    if states.shape != (NUM_FRAMES, len(TRAINING_STATE_NAMES)):
+        raise ValueError(f"state window must have shape {(NUM_FRAMES, 8)}, got {states.shape}")
+    if actions.shape != (ACTION_HORIZON, len(TRAINING_ACTION_NAMES)):
+        raise ValueError(f"action window must have shape {(ACTION_HORIZON, 7)}, got {actions.shape}")
+    rotations = np.stack([so3_exp(row[3:6]) for row in states])
+    delta_position = np.diff(states[:, :3], axis=0)
+    delta_rotation = np.stack(
+        [
+            so3_log(previous.T @ following)
+            for previous, following in zip(rotations[:-1], rotations[1:], strict=True)
+        ]
+    )
+    signs = np.asarray(finger_signs, dtype=np.float64)
+    if signs.shape != (2,) or np.any(np.abs(signs) < 1e-12):
+        raise ValueError("finger_signs must contain two non-zero values")
+    open_from_fingers = states[1:, 6:8] / (float(finger_scale) * signs[None, :])
+    finger_disagreement = float(np.max(np.abs(open_from_fingers[:, 0] - open_from_fingers[:, 1])))
+    if finger_disagreement > STATE_TOLERANCE:
+        raise ValueError(
+            f"FastWAM pseudo-finger state disagrees across left/right channels: max_abs={finger_disagreement}"
+        )
+    open_target = np.mean(open_from_fingers, axis=1)
+    expected_actions = np.concatenate(
+        (delta_position, delta_rotation, open_target[:, None]),
+        axis=1,
+    )
+    error = float(np.max(np.abs(expected_actions - actions)))
+    if error > STATE_TOLERANCE:
+        raise ValueError(
+            f"stored FastWAM action is not the declared adjacent transition: max_abs_error={error}"
+        )
+    quaternions = np.stack([matrix_to_quaternion_xyzw(rotation) for rotation in rotations[1:]])
+    ground_truth_absolute = np.concatenate(
+        (states[1:, :3], quaternions, (1.0 - np.clip(open_target, 0.0, 1.0))[:, None]),
+        axis=1,
+    )
+    return error, np.ascontiguousarray(ground_truth_absolute, dtype=np.float32)
+
+
 def _load_fastwam_adapter(fastwam_root: Path) -> tuple[Any, Any, Any]:
     source_root = (fastwam_root / "franka_project/src").resolve()
     if not source_root.is_dir():
@@ -493,12 +598,15 @@ def export_fixture(
     *,
     episode_index: int,
     frame_index: int,
+    policy_pose_frame: str = "eef",
 ) -> dict[str, Any]:
     fastwam_root = fastwam_root.expanduser().resolve()
     dataset_root = dataset_root.expanduser().resolve()
     output = output.expanduser().resolve()
     if episode_index < 0 or frame_index < 0:
         raise ValueError("episode_index and frame_index must be non-negative")
+    if policy_pose_frame not in {"eef", "link8"}:
+        raise ValueError("policy_pose_frame must be 'eef' or 'link8'")
 
     audit_root = dataset_root / "audit"
     profile_path = audit_root / "resolved_dataset_profile.json"
@@ -568,7 +676,9 @@ def export_fixture(
         where="task record",
     )
     task = str(task_record["task"])
-    if task != profile["task"]["default_instruction"]:
+    task_contract = profile["task"]
+    default_task = task_contract.get("default_instruction")
+    if isinstance(default_task, str) and not default_task.startswith("__MISSING_") and task != default_task:
         raise ValueError(f"fixture task drifted: expected profile task, got {task!r}")
     episode_record = _find_unique(
         _read_jsonl(episodes_path),
@@ -728,6 +838,12 @@ def export_fixture(
 
     state_window = np.ascontiguousarray(states[frame_index : frame_index + NUM_FRAMES])
     action_window = np.ascontiguousarray(actions[frame_index : frame_index + ACTION_HORIZON])
+    adjacent_action_error, ground_truth_absolute = _verify_adjacent_action_window(
+        state_window,
+        action_window,
+        finger_scale=finger_scale,
+        finger_signs=finger_signs,
+    )
     video_offsets = list(range(0, NUM_FRAMES, int(profile["sampling"]["action_video_freq_ratio"])))
     below_close_threshold = np.flatnonzero(action_window[:, -1] <= 0.2)
     combined_preprocessed = np.concatenate([preprocessed_images[name] for name in CAMERA_NAMES], axis=1)
@@ -781,8 +897,11 @@ def export_fixture(
         "wire_contract": {
             "state_names": list(WIRE_STATE_NAMES),
             "camera_order": list(CAMERA_NAMES),
+            "camera_topics": {camera["name"]: camera["topic"] for camera in profile["streams"]["cameras"]},
             "camera_shape": list(WIRE_CAMERA_SHAPE),
             "camera_dtype": "uint8",
+            "policy_pose_frame": policy_pose_frame,
+            "policy_pose_frame_basis": "explicit exporter declaration; verify against recorder/FK evidence",
             "rename_map": {},
             "fps": 30,
             "actions_per_chunk": ACTION_HORIZON,
@@ -815,6 +934,8 @@ def export_fixture(
             "video_output_frame_indices": [frame_index + value for value in video_offsets],
             "state_window_sha256": _array_sha256(state_window),
             "action_window_sha256": _array_sha256(action_window),
+            "adjacent_action_reconstruction_max_abs_error": adjacent_action_error,
+            "ground_truth_absolute8": ground_truth_absolute.astype(float).tolist(),
             "anchor_state8": stored_training_state.astype(float).tolist(),
             "terminal_state8": state_window[-1].astype(float).tolist(),
             "anchor_gripper_open_0_1": float(stored_training_state[-2] / finger_scale),
@@ -847,6 +968,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--episode-index", type=int, default=DEFAULT_EPISODE_INDEX)
     parser.add_argument("--frame-index", type=int, default=DEFAULT_FRAME_INDEX)
+    parser.add_argument(
+        "--policy-pose-frame",
+        choices=("eef", "link8"),
+        default="eef",
+        help="Semantic endpoint represented by the recorded current_pose values.",
+    )
     return parser.parse_args()
 
 
@@ -861,6 +988,7 @@ def main() -> None:
         args.output,
         episode_index=args.episode_index,
         frame_index=args.frame_index,
+        policy_pose_frame=args.policy_pose_frame,
     )
     print(json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False))
 

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Franka Action Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Franka Action Dashboard</h1>
+      <span id="connection" class="badge warn">连接中</span>
+      <span id="gateway" class="badge">HOLD</span>
+    </div>
+    <div class="header-meta">
+      <span id="chunk-label">chunk --</span>
+      <span id="plan-label">plan --</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="camera-grid">
+      <article class="panel camera-panel">
+        <div class="panel-title">
+          <span>camera1</span>
+          <label><input id="toggle-camera1" type="checkbox"> 加载低帧率缩略图</label>
+        </div>
+        <div class="camera-stage">
+          <img id="camera1" alt="camera1">
+          <span id="camera1-placeholder">未订阅 camera1</span>
+        </div>
+      </article>
+      <article class="panel camera-panel">
+        <div class="panel-title">
+          <span>camera2</span>
+          <label><input id="toggle-camera2" type="checkbox"> 加载低帧率缩略图</label>
+        </div>
+        <div class="camera-stage">
+          <img id="camera2" alt="camera2">
+          <span id="camera2-placeholder">未订阅 camera2</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel timeline-panel">
+      <div class="timeline-controls">
+        <button id="live-button" class="active">Live</button>
+        <label>窗口
+          <select id="window-seconds">
+            <option value="10">10s</option>
+            <option value="30" selected>30s</option>
+            <option value="60">60s</option>
+          </select>
+        </label>
+        <label>坐标
+          <select id="pose-frame">
+            <option value="eef">EEF / TCP</option>
+            <option value="link8">link8 / flange</option>
+          </select>
+        </label>
+        <input id="timeline" type="range" min="0" max="1" step="0.01" value="1">
+        <span id="time-label">--</span>
+      </div>
+      <div id="timeline-summary">等待 action chunk…</div>
+    </section>
+
+    <section class="chart-grid">
+      <article class="panel chart-panel wide">
+        <div class="panel-title"><span>IK joints (7-DoF)</span><span id="joints-value"></span></div>
+        <canvas id="joints-chart"></canvas>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><span>Gripper closed 0→1</span><span id="gripper-value"></span></div>
+        <canvas id="gripper-chart"></canvas>
+      </article>
+      <article class="panel chart-panel">
+        <div class="panel-title"><span id="xyz-title">End-effector xyz</span><span id="xyz-value"></span></div>
+        <canvas id="xyz-chart"></canvas>
+      </article>
+      <article class="panel chart-panel wide">
+        <div class="panel-title"><span id="quat-title">End-effector quaternion xyzw</span><span id="quat-value"></span></div>
+        <canvas id="quat-chart"></canvas>
+      </article>
+    </section>
+  </main>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

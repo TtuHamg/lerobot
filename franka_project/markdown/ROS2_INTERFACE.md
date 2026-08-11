@@ -114,8 +114,10 @@ arm_joint_names:
   - fr3_joint7
 
 gripper_joint_name: robotiq_85_left_knuckle_joint
+gripper_endpoint_parameter_node: /franka_gripper_follower
+gripper_endpoint_parameter_timeout_s: 5.0
 gripper_open_position: 0.0
-gripper_closed_position: 0.4
+gripper_closed_position: 0.8
 
 observation_buffer_size: 32
 max_observation_age_s: 0.25
@@ -128,10 +130,9 @@ ros2_shutdown_timeout_s: 5.0
 quaternion_norm_tolerance: 0.001
 ```
 
-这些是通用/PI0 历史默认值。当前 FastWAM move-cups checkpoint 的训练契约是
-`gripper_closed_position=0.8`、`gripper_max_skew_s<=0.01`；FastWAM client 会拒绝仍使用
-`0.4/0.05` 的配置。上真机前必须先确认现场 `JointState` 的实际单位和开闭端点，不能仅因
-训练 manifest 写了 `0.8` 就直接执行。
+live ROS2 client 启动时从 `/franka_gripper_follower` 一次性读取 `open_position` 和
+`closed_position` 并冻结。本机 Robotiq 2F-85 的真实边界为 `0.0/0.8 rad`，同时要求
+`gripper_max_skew_s<=0.01`。参数服务不可用或端点非法时，client fail-closed。
 
 gripper callback 在 `JointState.name` 中定位 `gripper_joint_name`，用下式转换并 clip 到
 `[0,1]`：
@@ -481,7 +482,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
 ```
 
 当前 FastWAM move-cups checkpoint 示例（注意 task、30 Hz、32 steps、空 rename map 和
-`0.8/0.01` gripper contract）：
+实时 Robotiq 的 `0.8/0.01` gripper contract）：
 
 ```bash
 python -m lerobot_robot_franka_ros.ros2_client \
@@ -491,8 +492,6 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.dry_run=false \
   --robot.ros2_interface_only=true \
   --robot.base_frame=base \
-  --robot.gripper_open_position=0.0 \
-  --robot.gripper_closed_position=0.8 \
   --robot.gripper_max_skew_s=0.01 \
   --task='move the paper cup from one end of the can to the other.' \
   --policy_type=fastwam \

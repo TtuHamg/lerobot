@@ -7,15 +7,14 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from typing import Any, Protocol
 
 import numpy as np
-
 from lerobot.types import RobotAction, RobotObservation
 
 from .config_franka_ros import FrankaRosConfig
 from .ros2_contract import AbsoluteActionChunk, RosObservationCache, RosObservationSnapshot
-
 
 _NS_PER_SECOND = 1_000_000_000
 
@@ -29,6 +28,8 @@ class _Ros2Runtime(Protocol):
     def is_running(self) -> bool: ...
 
     def start(self) -> None: ...
+
+    def canonicalize_policy_actions(self, actions: np.ndarray) -> np.ndarray: ...
 
     def publish_action_chunk(self, chunk: AbsoluteActionChunk) -> None: ...
 
@@ -129,10 +130,8 @@ class Ros2Backend:
                 if not runtime.is_running:
                     raise Ros2BackendError("ROS2 executor did not enter its running state")
             except Exception:
-                try:
+                with suppress(Exception):
                     runtime.close(timeout_s=self.config.ros2_shutdown_timeout_s)
-                except Exception:
-                    pass
                 raise
             self._runtime = runtime
             self._session_id = uuid.uuid4().hex
@@ -184,7 +183,10 @@ class Ros2Backend:
             raise Ros2BackendError(
                 "source_observation_timestep must not be later than the first published action timestep"
             )
-        if any(current != previous + 1 for previous, current in zip(timesteps, timesteps[1:])):
+        if any(
+            current != previous + 1
+            for previous, current in zip(timesteps, timesteps[1:], strict=False)
+        ):
             raise Ros2BackendError("Published action timesteps must be contiguous")
 
         period = float(period_s)
@@ -234,8 +236,9 @@ class Ros2Backend:
             if session_id is None:
                 raise Ros2BackendError("ROS2 session id is unavailable")
             plan_id = self._next_plan_id
+            canonical_actions = runtime.canonicalize_policy_actions(np.stack(action_rows))
             chunk = AbsoluteActionChunk(
-                actions=np.stack(action_rows),
+                actions=canonical_actions,
                 timesteps=timesteps,
                 source_timestep=int(source_observation_timestep),
                 source_observation_timestamp_ns=_seconds_to_ns(

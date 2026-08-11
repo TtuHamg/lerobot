@@ -99,7 +99,7 @@ Server 机器使用 `franka-fastwam-serve` 环境；这里的 task 不在命令�
 cd /m2v_intern/tujiahang/Projects/lerobot
 conda activate franka-fastwam-serve
 CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
-  --host=0.0.0.0 \
+  --host=127.0.0.1 \
   --port=15173 \
   --fps=30 \
   --inference_latency=0 \
@@ -108,8 +108,14 @@ CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
   --policy_type=fastwam \
   --pretrained_name_or_path=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/franka_eef_mix3_0804_joint_lora_after_warmup_pretrained_xt/lora_after_warmup_bs256_lr1e-4_r32a64/checkpoints/weights/step_005000.pt \
   --actions_per_chunk=32 \
+  --fastwam_state_gripper_encoding=closed_0_1 \
+  --fastwam_action_gripper_encoding=closed_0_1 \
   --policy_device=cuda
 ```
+
+这两个 gripper 参数相互独立：`state` 兼容 mix3 错置 raw endpoint 后冻结进 checkpoint
+的 pseudo-finger proprio，`action` 兼容同一问题导致第 7 维实际表示 physical closed target。
+其他 checkpoint 不得无条件复用这两个 override。
 
 机器人机器先启动仓库外已有的 Franka Cartesian safety gateway，并确认服务存在：
 
@@ -117,7 +123,14 @@ CUDA_VISIBLE_DEVICES=1 python franka_project/scripts/serve_franka_pi0_async.py \
 ros2 service type /franka_cartesian_safety_gateway/set_armed
 ```
 
-然后启动交互式 client；将 `<SERVER_IP>` 替换为 server 地址：
+当前 27353 拓扑通过 SSH-over-WebSocket 转发 gRPC，不占用同事的 `8081 -> 15174`：
+
+```bash
+ssh -N -L 127.0.0.1:18080:127.0.0.1:15173 \
+  -p 2222 -i ~/.ssh/id_rsa root@127.0.0.1
+```
+
+然后启动交互式 client：
 
 ```bash
 cd /m2v_intern/tujiahang/Projects/lerobot
@@ -126,18 +139,17 @@ source franka_project/ros2_ws/install/setup.bash
 conda activate franka-fastwam-serve
 export PYTHONPATH="$PWD/src:$PWD/franka_project/ros_lerobot/src:${PYTHONPATH:-}"
 python -m lerobot_robot_franka_ros.ros2_client \
-  --server_address=<SERVER_IP>:15173 \
+  --server_address=127.0.0.1:18080 \
   --robot.type=franka_ros \
   --robot.id=franka_fastwam_multitask \
   --robot.dry_run=false \
   --robot.ros2_interface_only=true \
   --robot.base_frame=base \
-  --robot.gripper_open_position=0.0 \
-  --robot.gripper_closed_position=0.8 \
   --robot.gripper_max_skew_s=0.01 \
   --robot.camera2_max_skew_s=0.1 \
   --robot.eef_max_skew_s=0.05 \
   --robot.max_action_chunk_waypoints=32 \
+  --robot.policy_eef_frame=link8 \
   --policy_type=fastwam \
   --pretrained_name_or_path=server-owned \
   --policy_device=cuda \
@@ -153,6 +165,11 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --interactive_task_control=true \
   --gateway_arm_timeout_s=5
 ```
+
+live client 启动时会从 `/franka_gripper_follower` 一次性读取 `open_position` 和
+`closed_position`，并在本次进程内冻结。参数服务不可用、返回值非有限数或两个端点相同时，
+client fail-closed，不进入 observation/action 循环。默认等待时间为 5 秒；仅当参数节点名称
+发生变化时才需要覆盖 `--robot.gripper_endpoint_parameter_node`。
 
 Client 握手后会保持 HOLD 并打印编号任务。操作顺序是 `1/2/3` 选择任务，再按 `a` 开始；切换时先按 `s`，或直接选择另一个编号（仍会先 disarm，之后必须再次按 `a`）。
 

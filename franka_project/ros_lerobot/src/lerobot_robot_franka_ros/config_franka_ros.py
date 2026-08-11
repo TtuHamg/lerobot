@@ -31,6 +31,11 @@ class FrankaRosConfig(RobotConfig):
     camera1_topic: str = "/camera1/camera1/color/image_raw"
     camera2_topic: str = "/camera2/camera2/color/image_raw"
     eef_pose_topic: str = "/franka_robot_state_broadcaster/current_pose"
+    robot_state_topic: str = "/franka_robot_state_broadcaster/robot_state"
+    # Frame semantics used by the policy checkpoint. ``eef`` is the Haply/ROS
+    # configured TCP (O_T_EE); ``link8`` is the Frankateleop/Polymetis flange
+    # pose (O_T_panda_link8 / O_T_fr3_link8).
+    policy_eef_frame: str = "eef"
     qpos_topic: str = "/franka/joint_states"
     gripper_topic: str = "/gripper/joint_states"
     base_frame: str = "base"
@@ -44,8 +49,15 @@ class FrankaRosConfig(RobotConfig):
         "fr3_joint7",
     )
     gripper_joint_name: str = "robotiq_85_left_knuckle_joint"
+    # Live endpoint calibration is owned by the gripper follower.  The ROS2
+    # runtime reads ``open_position`` and ``closed_position`` from this node
+    # once during startup and then freezes them for the lifetime of the client.
+    gripper_endpoint_parameter_node: str = "/franka_gripper_follower"
+    gripper_endpoint_parameter_timeout_s: float = 5.0
+    # These values remain the non-ROS/dry-run defaults.  A live ROS2 runtime
+    # never uses them to normalize JointState messages.
     gripper_open_position: float = 0.0
-    gripper_closed_position: float = 0.4
+    gripper_closed_position: float = 0.8
     observation_buffer_size: int = 32
     max_observation_age_s: float = 0.25
     camera2_max_skew_s: float = 0.05
@@ -78,6 +90,7 @@ class FrankaRosConfig(RobotConfig):
             "camera1_topic": self.camera1_topic,
             "camera2_topic": self.camera2_topic,
             "eef_pose_topic": self.eef_pose_topic,
+            "robot_state_topic": self.robot_state_topic,
             "qpos_topic": self.qpos_topic,
             "gripper_topic": self.gripper_topic,
         }
@@ -88,6 +101,8 @@ class FrankaRosConfig(RobotConfig):
             raise ValueError("ROS topic names must be distinct")
         if not self.action_chunk_topic.startswith("/lerobot/"):
             raise ValueError("action_chunk_topic must stay under the isolated /lerobot/ namespace")
+        if self.policy_eef_frame not in {"eef", "link8"}:
+            raise ValueError("policy_eef_frame must be 'eef' or 'link8'")
         if self.max_action_chunk_waypoints is not None and (
             isinstance(self.max_action_chunk_waypoints, bool)
             or not isinstance(self.max_action_chunk_waypoints, Integral)
@@ -109,6 +124,14 @@ class FrankaRosConfig(RobotConfig):
             raise ValueError("arm_joint_names must not contain empty names")
         if not self.gripper_joint_name:
             raise ValueError("gripper_joint_name must not be empty")
+        if (
+            not isinstance(self.gripper_endpoint_parameter_node, str)
+            or not self.gripper_endpoint_parameter_node.startswith("/")
+            or " " in self.gripper_endpoint_parameter_node
+        ):
+            raise ValueError(
+                "gripper_endpoint_parameter_node must be an absolute ROS node name without spaces"
+            )
         gripper_positions = (self.gripper_open_position, self.gripper_closed_position)
         if any(
             isinstance(position, bool)
@@ -132,6 +155,7 @@ class FrankaRosConfig(RobotConfig):
             "eef_max_skew_s": self.eef_max_skew_s,
             "qpos_max_skew_s": self.qpos_max_skew_s,
             "gripper_max_skew_s": self.gripper_max_skew_s,
+            "gripper_endpoint_parameter_timeout_s": self.gripper_endpoint_parameter_timeout_s,
             "action_chunk_validity_s": self.action_chunk_validity_s,
             "ros2_shutdown_timeout_s": self.ros2_shutdown_timeout_s,
         }

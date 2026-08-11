@@ -136,3 +136,35 @@ def test_one_shot_sender_verifies_fixture_sha_and_task(tmp_path: Path) -> None:
     sender._verify_fixture_ledger(fixture, task="grab the paper cup.")
     with pytest.raises(ValueError, match="source.task"):
         sender._verify_fixture_ledger(fixture, task="move a different object")
+
+
+def test_adjacent_action_window_reconstructs_absolute_targets() -> None:
+    states = np.zeros((exporter.NUM_FRAMES, len(exporter.TRAINING_STATE_NAMES)), dtype=np.float32)
+    states[:, 0] = np.arange(exporter.NUM_FRAMES, dtype=np.float32) * 0.001
+    open_targets = np.linspace(1.0, 0.0, exporter.NUM_FRAMES, dtype=np.float32)
+    states[:, 6] = 0.04 * open_targets
+    states[:, 7] = -0.04 * open_targets
+    actions = np.zeros((exporter.ACTION_HORIZON, len(exporter.TRAINING_ACTION_NAMES)), dtype=np.float32)
+    actions[:, 0] = 0.001
+    actions[:, 6] = open_targets[1:]
+
+    error, absolute = exporter._verify_adjacent_action_window(
+        states,
+        actions,
+        finger_scale=0.04,
+        finger_signs=(1.0, -1.0),
+    )
+
+    assert error <= exporter.STATE_TOLERANCE
+    assert absolute.shape == (exporter.ACTION_HORIZON, 8)
+    np.testing.assert_allclose(absolute[:, 0], states[1:, 0], atol=1e-7)
+    np.testing.assert_allclose(absolute[:, 7], 1.0 - open_targets[1:], atol=1e-7)
+
+    actions[5, 0] += 0.01
+    with pytest.raises(ValueError, match="not the declared adjacent transition"):
+        exporter._verify_adjacent_action_window(
+            states,
+            actions,
+            finger_scale=0.04,
+            finger_signs=(1.0, -1.0),
+        )

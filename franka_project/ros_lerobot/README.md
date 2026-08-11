@@ -57,10 +57,11 @@ same canonical absolute8 action. At startup it only selects and validates the ca
 | `fastwam` | `{}` |
 
 The ROS2 client also requires `action_offset=1` and the frozen Cartesian `base_frame=base` used by
-both checkpoint families. The current FastWAM move-cups artifact additionally requires
-`gripper_open_position=0.0`, `gripper_closed_position=0.8`, and
-`gripper_max_skew_s<=0.01`; startup rejects the historical `0.4/0.05` defaults. Confirm those joint
-units and endpoints on the live robot before enabling any downstream execution path. Its recorded
+both checkpoint families. In live ROS2 mode the client reads `open_position` and
+`closed_position` once from `/franka_gripper_follower` during startup and freezes that calibration;
+startup fails if the parameter service or either endpoint is invalid. The current FastWAM
+move-cups artifact additionally requires `gripper_max_skew_s<=0.01` for the live Robotiq joint.
+Its recorded
 camera, EEF, and gripper topics/joint name are also fixed, with `camera2_max_skew_s<=0.1` and
 `eef_max_skew_s<=0.05`; startup rejects CLI overrides that drift from this sensor contract.
 
@@ -121,6 +122,52 @@ ros2 launch franka_lerobot_rviz action_viz.launch.py
 
 Use either client-owned or standalone launch for a run so duplicate visualizer/RViz nodes are not
 started accidentally.
+
+### Low-load web dashboard
+
+The client can alternatively own a localhost-only rolling web dashboard:
+
+```bash
+python -m lerobot_robot_franka_ros.ros2_client ... \
+  --robot.type=franka_ros \
+  --visualize_action_web=true
+```
+
+The browser opens at `http://127.0.0.1:8768`. The dashboard keeps a bounded rolling history and
+shows Cartesian chunks, quaternion/gripper values, and the lightweight gateway's associated
+seven-joint IK result. Both camera subscriptions are absent by default; enabling a camera in the
+page creates a throttled thumbnail subscription, and disabling it destroys that subscription.
+`--visualize_action` and `--visualize_action_web` are mutually exclusive.
+The pose-frame selector switches both planned and measured curves between canonical `O_T_EE`
+(`EEF / TCP`) and `O_T_link8` (`link8 / flange`). It captures `F_T_EE` once and immediately removes
+the 1 kHz RobotState subscription. The initial selector follows `robot.policy_eef_frame`.
+
+Useful options:
+
+```bash
+--web_dashboard_port=8768 \
+--web_dashboard_history_seconds=60 \
+--web_dashboard_camera_fps=3 \
+--web_dashboard_open_browser=true
+```
+
+### Policy EEF frame compatibility
+
+Choose the Cartesian frame semantics used by the checkpoint explicitly:
+
+```bash
+# Haply/ROS datasets: configured physical TCP O_T_EE
+--robot.policy_eef_frame=eef
+
+# Frankateleop/Polymetis datasets: panda_link8 / fr3_link8 flange pose
+--robot.policy_eef_frame=link8
+```
+
+In `link8` mode the client captures the fixed live `F_T_EE` once, removes the 1 kHz RobotState
+subscription, converts the observed `O_T_EE` to `O_T_link8` before inference, and converts returned
+link8 targets back to canonical `O_T_EE` before ROS publication. The gateway therefore retains one
+unambiguous IK contract. Do not infer this mode from pose values; a checkpoint trained on mixed
+frame semantics should be regenerated when possible.
 
 ### Selective MCAP / MP4 recording
 

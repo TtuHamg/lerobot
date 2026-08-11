@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Run the topic recorder with the ROS overlays used by the Franka client.
+#
+# Interactive multi-session recording (key-driven start/stop/save):
+#   ./record_franka_topics.sh --interactive --topics camera1 camera2 qpos eef gripper
+#     SPACE/ENTER  start a recording, press again to stop and save
+#     q            quit (saves the current recording first)
+#   With --interactive, --output is the parent dir for timestamped recordings.
 set -Eeo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

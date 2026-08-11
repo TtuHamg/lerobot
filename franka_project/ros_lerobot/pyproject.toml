@@ -8,12 +8,17 @@ version = "0.2.0"
 description = "Out-of-tree LeRobot Franka adapter with dry-run and non-actuating ROS2 interfaces"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.9.0",
     "lerobot>=0.5.2",
     "numpy>=2.0.0,<2.3.0",
+    "opencv-python-headless>=4.8.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lerobot_robot_franka_ros = ["web/*.html", "web/*.css", "web/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

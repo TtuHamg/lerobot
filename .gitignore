@@ -199,6 +199,7 @@ notebook/
 !src/**/*.md
 !AGENTS.md
 !AGENT_GUIDE.md
+!MEMORY.md
 !AI_POLICY.md
 !CLAUDE.md
 !CODE_OF_CONDUCT.md

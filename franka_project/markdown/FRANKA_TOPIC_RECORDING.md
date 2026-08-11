@@ -14,7 +14,7 @@ cd /home/pnp/Projects/lerobot
 
 # 两路视频：输出 recordings/<时间>_mp4/camera1.mp4 和 camera2.mp4
 franka_project/scripts/record_franka_topics.sh \
-  --topics camera1 camera2
+  --topics camera1 camera2 --interactive
 
 # 相机 + 关节位置 + EEF：自动写 MCAP
 franka_project/scripts/record_franka_topics.sh \

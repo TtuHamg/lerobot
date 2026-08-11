@@ -2,6 +2,8 @@ This file provides guidance to AI agents when working with code in this reposito
 
 > **User-facing help → [`AGENT_GUIDE.md`](./AGENT_GUIDE.md)** (SO-101 setup, recording, picking a policy, training duration, eval — with copy-pasteable commands).
 
+> **Franka/FastWAM live deployment → [`MEMORY.md`](./MEMORY.md)**. Read this before changing the pnp/KML-dev real-robot path; it records the FCI, EEF/link8, and gripper compatibility invariants.
+
 ## Project Overview
 
 LeRobot is a PyTorch-based library for real-world robotics, providing datasets, pretrained policies, and tools for training, evaluation, data collection, and robot control. It integrates with Hugging Face Hub for model/dataset sharing.

@@ -8,12 +8,15 @@ import hashlib
 import math
 import os
 import re
+import select
 import signal
 import statistics
 import subprocess
 import sys
+import termios
 import time
-from collections.abc import Sequence
+import tty
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -62,6 +65,74 @@ def _install_stop_signal_handlers() -> None:
             signal.signal(stop_signal, _request_stop)
 
 
+_START_KEYS = frozenset({" ", "\r", "\n"})
+_STOP_KEYS = frozenset({" ", "\r", "\n"})
+_QUIT_KEYS = frozenset({"q", "Q", "\x03", "\x04"})  # q, Ctrl+C, Ctrl+D
+
+
+class KeyReader:
+    """Read single keypresses from a TTY without blocking, restoring terminal state."""
+
+    def __init__(self) -> None:
+        self._fd = sys.stdin.fileno()
+        self._saved_attrs: list[Any] | None = None
+
+    def __enter__(self) -> "KeyReader":
+        if not sys.stdin.isatty():
+            raise RuntimeError(
+                "Interactive recording requires a terminal (TTY) on stdin; "
+                "run it from an interactive shell instead of a pipe or service manager"
+            )
+        self._saved_attrs = termios.tcgetattr(self._fd)
+        tty.setcbreak(self._fd)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        if self._saved_attrs is not None:
+            termios.tcsetattr(self._fd, termios.TCSADRAIN, self._saved_attrs)
+            self._saved_attrs = None
+
+    def poll(self, timeout_s: float = 0.0) -> str | None:
+        """Return one pending keypress, or None if none arrives within timeout_s."""
+
+        ready, _, _ = select.select([self._fd], [], [], timeout_s)
+        if not ready:
+            return None
+        char = os.read(self._fd, 1)
+        return char.decode("utf-8", errors="replace") if char else None
+
+
+def _wait_for_start(key_reader: KeyReader) -> bool:
+    """Block until the operator asks to start a session (True) or to quit (False)."""
+
+    while not _STOP_REQUESTED:
+        key = key_reader.poll(0.2)
+        if key is None:
+            continue
+        if key in _QUIT_KEYS:
+            return False
+        if key in _START_KEYS:
+            return True
+    return False
+
+
+class _StopKeyWatcher:
+    """Poll for keypresses while a session records; stop on stop/quit keys."""
+
+    def __init__(self, key_reader: KeyReader) -> None:
+        self._key_reader = key_reader
+        self.quit_requested = False
+
+    def __call__(self) -> bool:
+        key = self._key_reader.poll(0.0)
+        if key is None:
+            return False
+        if key in _QUIT_KEYS:
+            self.quit_requested = True
+            return True
+        return key in _STOP_KEYS
+
+
 def resolve_topics(values: Sequence[str]) -> list[str]:
     """Resolve aliases/comma-separated values and preserve first-seen order."""
 
@@ -94,9 +165,11 @@ def select_output_format(requested: str, topics: Sequence[str]) -> str:
     return "mp4" if topics and set(topics).issubset(VIDEO_TOPICS) else "mcap"
 
 
-def default_output_path(output_format: str, *, now: datetime | None = None) -> Path:
+def default_output_path(
+    output_format: str, *, root: Path | None = None, now: datetime | None = None
+) -> Path:
     timestamp = (now or datetime.now()).astimezone().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-    return DEFAULT_OUTPUT_ROOT / f"{timestamp}_{output_format}"
+    return (root or DEFAULT_OUTPUT_ROOT) / f"{timestamp}_{output_format}"
 
 
 def build_mcap_command(
@@ -160,6 +233,7 @@ def record_mcap(
     duration_s: float | None,
     storage_profile: str,
     qos_overrides_path: Path | None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     if _STOP_REQUESTED:
         return
@@ -176,7 +250,11 @@ def record_mcap(
     )
     print("Starting MCAP recorder:", " ".join(command), flush=True)
     try:
-        process = subprocess.Popen(command, start_new_session=True)  # noqa: S603
+        # Keyboard controls are disabled, so detach stdin to avoid competing with
+        # this process for interactive keypresses in --interactive mode.
+        process = subprocess.Popen(  # noqa: S603
+            command, start_new_session=True, stdin=subprocess.DEVNULL
+        )
     except FileNotFoundError as error:
         raise RuntimeError("ros2 was not found; source the ROS 2 Jazzy environment first") from error
 
@@ -185,6 +263,8 @@ def record_mcap(
     try:
         while process.poll() is None and not _STOP_REQUESTED:
             if deadline is not None and time.monotonic() >= deadline:
+                break
+            if should_stop is not None and should_stop():
                 break
             time.sleep(0.1)
     except KeyboardInterrupt:
@@ -297,6 +377,7 @@ def record_mp4(
     fps: float | None,
     codec: str,
     topic_wait_timeout_s: float,
+    should_stop: Callable[[], bool] | None = None,
 ) -> None:
     if _STOP_REQUESTED:
         return
@@ -454,12 +535,14 @@ def record_mp4(
             # its own subscription as a topic, and early streams could exceed
             # --duration-s while waiting for a later camera.
             node.start_subscriptions()
-            print("Recording MP4; press Ctrl+C to stop.", flush=True)
+            if should_stop is None:
+                print("Recording MP4; press Ctrl+C to stop.", flush=True)
             deadline = None if duration_s is None else time.monotonic() + duration_s
             while (
                 rclpy.ok()
                 and not _STOP_REQUESTED
                 and (deadline is None or time.monotonic() < deadline)
+                and not (should_stop is not None and should_stop())
             ):
                 rclpy.spin_once(node, timeout_sec=0.2)
     except KeyboardInterrupt:
@@ -486,6 +569,61 @@ def record_mp4(
         )
 
 
+def run_interactive(
+    topics: Sequence[str],
+    output_root: Path,
+    output_format: str,
+    *,
+    record_one: Callable[[Path, Callable[[], bool]], None],
+) -> None:
+    """Key-driven loop: start/stop/save one recording per keypress, repeatedly.
+
+    SPACE or ENTER starts a session; pressing it again stops and finalizes that
+    session. 'q' (or Ctrl+C / Ctrl+D) quits: from the idle prompt it exits
+    immediately, and during a recording it stops/saves that session first.
+    """
+
+    print(
+        "\nInteractive recording. Controls:\n"
+        "  SPACE / ENTER  start a recording, then press again to stop and save\n"
+        "  q              quit (stops and saves the current recording first)",
+        flush=True,
+    )
+    with KeyReader() as key_reader:
+        session_index = 0
+        while not _STOP_REQUESTED:
+            print(
+                "\nIdle. Press SPACE/ENTER to start recording, or 'q' to quit.",
+                flush=True,
+            )
+            if not _wait_for_start(key_reader):
+                break
+            session_index += 1
+            output = default_output_path(output_format, root=output_root)
+            print(
+                f"\n[Session {session_index}] Recording -> {output}\n"
+                "Press SPACE/ENTER to stop and save (or 'q' to save and quit).",
+                flush=True,
+            )
+            watcher = _StopKeyWatcher(key_reader)
+            try:
+                record_one(output, watcher)
+            except (
+                FileExistsError,
+                FileNotFoundError,
+                RuntimeError,
+                TimeoutError,
+                TypeError,
+                ValueError,
+            ) as error:
+                print(f"ERROR in session {session_index}: {error}", file=sys.stderr, flush=True)
+            else:
+                print(f"[Session {session_index}] Saved.", flush=True)
+            if watcher.quit_requested:
+                break
+    print("\nInteractive recording finished.", flush=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     aliases = ", ".join(sorted(TOPIC_ALIASES))
     parser = argparse.ArgumentParser(
@@ -505,6 +643,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         help="MCAP output directory, MP4 directory, or one .mp4 path for one camera",
+    )
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=(
+            "Key-driven multi-session mode: SPACE/ENTER starts a recording, "
+            "pressing it again stops and saves, then start the next one; 'q' quits. "
+            "In this mode --output is treated as the parent directory for timestamped "
+            "recordings instead of a single fixed path."
+        ),
     )
     parser.add_argument("--duration-s", type=float, help="Stop cleanly after this many seconds")
     parser.add_argument(
@@ -557,20 +706,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         _validate_positive_optional(args.fps, "--fps")
         topics = resolve_topics(args.topics)
         output_format = select_output_format(args.format, topics)
-        output = (args.output or default_output_path(output_format)).expanduser().resolve()
+        qos_overrides_path = (
+            args.qos_profile_overrides_path.expanduser().resolve()
+            if args.qos_profile_overrides_path is not None
+            else None
+        )
         print(f"Selected topics: {', '.join(topics)}", flush=True)
         print(f"Output format: {output_format}", flush=True)
+
+        if args.interactive:
+            output_root = (args.output or DEFAULT_OUTPUT_ROOT).expanduser().resolve()
+
+            def record_one(output: Path, should_stop: Callable[[], bool]) -> None:
+                if output_format == "mcap":
+                    record_mcap(
+                        topics,
+                        output,
+                        duration_s=args.duration_s,
+                        storage_profile=args.mcap_storage_profile,
+                        qos_overrides_path=qos_overrides_path,
+                        should_stop=should_stop,
+                    )
+                else:
+                    record_mp4(
+                        topics,
+                        output,
+                        duration_s=args.duration_s,
+                        fps=args.fps,
+                        codec=args.codec,
+                        topic_wait_timeout_s=args.topic_wait_timeout_s,
+                        should_stop=should_stop,
+                    )
+
+            run_interactive(topics, output_root, output_format, record_one=record_one)
+            return 0
+
+        output = (args.output or default_output_path(output_format)).expanduser().resolve()
         if output_format == "mcap":
             record_mcap(
                 topics,
                 output,
                 duration_s=args.duration_s,
                 storage_profile=args.mcap_storage_profile,
-                qos_overrides_path=(
-                    args.qos_profile_overrides_path.expanduser().resolve()
-                    if args.qos_profile_overrides_path is not None
-                    else None
-                ),
+                qos_overrides_path=qos_overrides_path,
             )
         else:
             record_mp4(

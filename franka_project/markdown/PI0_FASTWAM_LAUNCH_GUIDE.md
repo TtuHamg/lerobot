@@ -146,7 +146,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.ros2_interface_only=true \
   --robot.base_frame=base \
   --robot.gripper_open_position=0.0 \
-  --robot.gripper_closed_position=0.8 \
+  --robot.gripper_closed_position=0.4 \
   --task='pick up the potato chip' \
   --policy_type=pi0 \
   --pretrained_name_or_path=server-owned \
@@ -207,7 +207,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.ros2_interface_only=true \
   --robot.base_frame=base \
   --robot.gripper_open_position=0.0 \
-  --robot.gripper_closed_position=0.8 \
+  --robot.gripper_closed_position=0.4 \
   --task='grab the paper cup.' \
   --policy_type=pi0 \
   --pretrained_name_or_path=server-owned \
@@ -225,7 +225,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
 ```
 
 ```bash
-python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_pi0_schema2   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.8   --task='grab the paper cup.'   --policy_type=pi0   --pretrained_name_or_path=server-owned   --policy_device=cpu   --client_device=cpu   --actions_per_chunk=50   --robot.max_action_chunk_waypoints=50   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map='{"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}' --observation_trigger_mode=post_action_delay --post_action_observation_delay_s=3
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_pi0_schema2   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.4   --task='grab the paper cup.'   --policy_type=pi0   --pretrained_name_or_path=server-owned   --policy_device=cpu   --client_device=cpu   --actions_per_chunk=50   --robot.max_action_chunk_waypoints=50   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map='{"observation.images.camera1":"observation.images.base_0_rgb","observation.images.camera2":"observation.images.left_wrist_0_rgb"}' --observation_trigger_mode=post_action_delay --post_action_observation_delay_s=3
 ```
 
 
@@ -272,7 +272,8 @@ server 的 fps、chunk size、state/action 维度和双相机排列是否和训�
 ### 5.2 可选：joint video + action 推理
 
 默认只运行 action-only 推理。加入下面的参数后，server 会调用 `infer_joint`，按训练配置的
-33 帧 horizon 同时生成未来视频和 action；RPC 始终只把 action 发给机器人。
+9 个稀疏视频帧（offset `0,4,...,32`，7.5 FPS）同时生成未来视频和 action；RPC 始终只把
+action 发给机器人。
 
 ```bash
 --fastwam_joint_video_inference=true
@@ -285,9 +286,21 @@ server 的 fps、chunk size、state/action 维度和双相机排列是否和训�
 --fastwam_joint_video_output_dir=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/joint_videos
 ```
 
-每次推理会在该目录写入一个 `fastwam_joint_t<timestep>_<timestamp>.mp4`，帧率为 30。保存是同步
+每次推理会在该目录写入一个 `fastwam_joint_t<timestep>_<timestamp>.mp4`，帧率为 7.5。保存是同步
 I/O；joint 推理和视频编码都会显著增加耗时与显存占用，不适合维持 30 Hz 的实时控制，建议仅在
 离线或低速实验中开启。
+
+`franka_eef_mix3_0804` 的历史 gripper metadata 与视频中的物理开闭方向相反。部署该
+`step_005000.pt` 时必须显式加入：
+
+```bash
+--fastwam_state_gripper_encoding=closed_0_1
+--fastwam_action_gripper_encoding=closed_0_1
+```
+
+`state` 参数控制 FastWAM 8D proprio 中 pseudo-finger 的物理含义；`action` 参数控制模型
+第 7 维输出的物理含义。两者必须分别验证。其他 checkpoint 保持默认 `open_0_1`，除非其
+golden fixture 分别证明 state 或 action 实际使用 `closed_0_1`。
 
 环境准备完成后先执行：
 
@@ -333,7 +346,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --robot.ros2_interface_only=true \
   --robot.base_frame=base \
   --robot.gripper_open_position=0.0 \
-  --robot.gripper_closed_position=0.8 \
+  --robot.gripper_closed_position=0.4 \
   --robot.gripper_max_skew_s=0.01 \
   --task='move the paper cup from one end of the can to the other.' \
   --policy_type=fastwam \
@@ -341,7 +354,7 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --policy_device=cuda \
   --client_device=cpu \
   --actions_per_chunk=32 \
-  --robot.max_action_chunk_waypoints=25 \
+  --robot.max_action_chunk_waypoints=32 \
   --action_offset=1 \
   --fps=30 \
   --chunk_size_threshold=0.0 \
@@ -351,7 +364,14 @@ python -m lerobot_robot_franka_ros.ros2_client \
   --rename_map={}
 ```
 ```
-python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_fastwam_schema1   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.8   --robot.gripper_max_skew_s=0.01   --task='grab the paper cup.'   --policy_type=fastwam   --pretrained_name_or_path=server-owned   --policy_device=cuda   --client_device=cpu   --actions_per_chunk=32   --robot.max_action_chunk_waypoints=25   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map={}
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_fastwam_schema1   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.4   --robot.gripper_max_skew_s=0.01   --task='grab the paper cup.'   --policy_type=fastwam   --pretrained_name_or_path=server-owned   --policy_device=cuda   --client_device=cpu   --actions_per_chunk=32   --robot.max_action_chunk_waypoints=32   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map={}
+
+source /opt/ros/jazzy/setup.bash
+source franka_project/ros2_ws/install/setup.bash
+
+ bash stop_all.sh && bash ~/.cursor/skills/franka-real-validation/scripts/start_stack.sh
+
+python -m lerobot_robot_franka_ros.ros2_client   --server_address=127.0.0.1:8080   --robot.type=franka_ros   --robot.id=franka_fastwam_multitask   --robot.dry_run=false   --robot.ros2_interface_only=true   --robot.base_frame=base   --robot.gripper_open_position=0.0   --robot.gripper_closed_position=0.4   --robot.gripper_max_skew_s=0.01   --policy_type=fastwam   --pretrained_name_or_path=server-owned   --policy_device=cuda   --client_device=cpu   --actions_per_chunk=32   --robot.max_action_chunk_waypoints=32   --action_offset=1   --fps=30   --chunk_size_threshold=0.0   --aggregate_fn_name=latest_only   --enable_pending_observation=true   --pending_observation_timeout_s=30   --rename_map={} --interactive_task_control=true --gateway_arm_timeout_s=5 --visualize_action_web=true --robot.policy_eef_frame=link8
 ```
 
 FastWAM 必须使用空 `rename_map`；不要复制 PI0 的 camera rename map。
@@ -373,3 +393,242 @@ FastWAM 必须使用空 `rename_map`；不要复制 PI0 的 camera rename map。
 ```
 
 这样不会因为 state 与上一帧相似而跳过 inference。
+
+
+## 7. 最新启动方式：mix3 `step_005000`（27353 + SSH 隧道）
+
+本节是当前推荐方式。数据流为：
+
+```text
+client -> 127.0.0.1:18080 -> SSH:2222 -> server:15173
+       -> CartesianActionChunk -> IK gateway -> Franka controller
+```
+
+固定配置：
+
+```text
+checkpoint: step_005000.pt
+task:       pick up the cup / chips / tape
+fps:        30
+chunk:      32（禁止裁成 25）
+pose frame: link8
+gripper:    model action[6] 按 closed_0_1 解码
+```
+
+### 7.1 Client 机器：启动 KML SSH 和模型转发
+
+先在 Edge 中登录 27353 的 KML 页面并完成 SSO/MFA，然后打开两个终端。
+
+终端 A：
+
+```bash
+cd /home/pnp/Projects/lerobot
+
+~/miniconda3/envs/lerobot/bin/python \
+  franka_project/scripts/ws_ssh_client.py \
+  --browser-cookie \
+  --browser=edge
+```
+
+终端 B：
+
+```bash
+ssh -N \
+  -L 127.0.0.1:18080:127.0.0.1:15173 \
+  -p 2222 \
+  -i ~/.ssh/id_rsa \
+  -o IdentitiesOnly=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=10 \
+  -o ServerAliveCountMax=3 \
+  root@127.0.0.1
+```
+
+检查：
+
+```bash
+ss -ltnp '( sport = :2222 or sport = :18080 )'
+```
+
+两个端口均已监听时不要重复启动。
+
+### 7.2 Server 机器：启动修复后的 FastWAM server
+
+通过 `ssh -p 2222 -i ~/.ssh/id_rsa root@127.0.0.1` 登录 27353，在远端执行：
+
+```bash
+cd /m2v_intern/tujiahang/Projects/lerobot
+
+export FASTWAM_CHECKPOINT=/m2v_intern/tujiahang/Projects/FastWAM/franka_project/runs/franka_eef_mix3_0804_joint_lora_after_warmup_pretrained_xt/lora_after_warmup_bs256_lr1e-4_r32a64/checkpoints/weights/step_005000.pt
+export PYTHONPATH="$PWD/src:$PWD/franka_project/src:${PYTHONPATH:-}"
+
+CUDA_VISIBLE_DEVICES=0 \
+  /ytech_milm_intern/tujiahang/miniconda3/envs/franka-fastwam-serve/bin/python \
+  franka_project/scripts/serve_franka_pi0_async.py \
+  --host=127.0.0.1 \
+  --port=15173 \
+  --fps=30 \
+  --inference_latency=0 \
+  --obs_queue_timeout=1 \
+  --observation_similarity_mode=none \
+  --policy_type=fastwam \
+  --pretrained_name_or_path="$FASTWAM_CHECKPOINT" \
+  --actions_per_chunk=32 \
+  --policy_device=cuda \
+  --fastwam_state_gripper_encoding=closed_0_1 \
+  --fastwam_action_gripper_encoding=closed_0_1 \
+  --fastwam_joint_video_inference=true \
+  --fastwam_joint_video_output_dir=/m2v_intern/tujiahang/Projects/lerobot/franka_project/runs/depoly_joint_videos/20260810
+
+```
+
+上面的基础命令默认关闭视频，只运行 action 推理。每次启动 server 时可用下列参数选择模式。
+
+只生成 joint video、不保存：
+
+```bash
+--fastwam_joint_video_inference=true
+```
+
+生成并保存每次推理的视频：
+
+```bash
+export FASTWAM_VIDEO_OUTPUT=/m2v_intern/tujiahang/Projects/lerobot/franka_project/runs/depoly_joint_videos/20260810_mix3_step005000
+mkdir -p "$FASTWAM_VIDEO_OUTPUT"
+
+# 将这两个参数追加到基础 server 命令末尾：
+--fastwam_joint_video_inference=true \
+--fastwam_joint_video_output_dir="$FASTWAM_VIDEO_OUTPUT"
+```
+
+不传 `--fastwam_joint_video_inference` 即关闭视频。仅传 output dir 而未开启 joint-video 会
+fail-fast。切换模式需要重启 server，不支持运行时热切换。
+
+视频固定为 9 帧、7.5 FPS。同 seed 下 action 与 action-only 模式一致；保存视频会增加 Ceph I/O。
+
+### 7.3 Client 机器：启动 Franka controller（保持 HOLD）
+
+当前 controller 为 `inactive`、曾发生 FCI error，或者切换过其他同事的 joint 栈时，先完整清理：
+
+```bash
+bash ~/franka/stop_all.sh --keep-haply-manager
+```
+
+启动 Cartesian real-validation 栈：
+
+```bash
+# 不自动移动到 rest pose：
+bash ~/.cursor/skills/franka-real-validation/scripts/start_stack.sh --no-rest
+
+# 若需要移动到保存的标准起始位，确认工作区安全后去掉 --no-rest：
+# bash ~/.cursor/skills/franka-real-validation/scripts/start_stack.sh
+```
+
+必须看到：
+
+```text
+REAL VALIDATION READY — HOLD / NOT ARMED
+```
+
+并确认：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 control list_controllers
+ros2 topic echo /lerobot/franka/safety_gateway_status --once
+```
+
+三个 controller 应为 `active`，gateway 应满足：
+
+```text
+armed: false
+state_fresh: true
+robot_ready: true
+controller_ready: true
+has_active_plan: false
+```
+
+### 7.4 Client 机器：启动 LeRobot client
+
+另开终端：
+
+```bash
+cd /home/pnp/Projects/lerobot
+
+source /opt/ros/jazzy/setup.bash
+source ~/franka/franka_ros2_ws/install/local_setup.bash
+source ~/franka/haply_ros/install/local_setup.bash
+source franka_project/ros2_ws/install/local_setup.bash
+
+export PYTHONPATH="$PWD/src:$PWD/franka_project/src:$PWD/franka_project/ros_lerobot/src:${PYTHONPATH:-}"
+
+~/miniconda3/envs/lerobot/bin/python \
+  -m lerobot_robot_franka_ros.ros2_client \
+  --server_address=127.0.0.1:18080 \
+  --robot.type=franka_ros \
+  --robot.id=franka_fastwam_mix3 \
+  --robot.dry_run=false \
+  --robot.ros2_interface_only=true \
+  --robot.base_frame=base \
+  --robot.gripper_open_position=0.0 \
+  --robot.gripper_closed_position=0.4 \
+  --robot.gripper_max_skew_s=0.01 \
+  --robot.camera2_max_skew_s=0.1 \
+  --robot.eef_max_skew_s=0.05 \
+  --robot.max_action_chunk_waypoints=32 \
+  --robot.policy_eef_frame=link8 \
+  --policy_type=fastwam \
+  --pretrained_name_or_path=server-owned \
+  --policy_device=cuda \
+  --client_device=cpu \
+  --actions_per_chunk=32 \
+  --action_offset=1 \
+  --fps=30 \
+  --chunk_size_threshold=0.0 \
+  --aggregate_fn_name=latest_only \
+  --enable_pending_observation=true \
+  --pending_observation_timeout_s=120 \
+  --rename_map={} \
+  --interactive_task_control=true \
+  --visualize_action_web=true \
+  --gateway_arm_timeout_s=5
+```
+
+正常启动应出现：
+
+```text
+F_T_EE captured for policy_eef_frame=link8
+Interactive client started in HOLD with 3 tasks
+```
+
+### 7.5 任务按键与安全停止
+
+在 `task>` 提示符中：
+
+```text
+1  pick up the cup
+2  pick up the chips
+3  pick up the tape
+s  停止任务并 DISARM
+a  ARM 当前任务
+q  DISARM 并退出
+```
+
+选择 `1/2/3` 后仍保持 HOLD。按 `a` 会开始真实机械臂和夹爪运动；只有在工作区无人、无障碍物、
+急停可立即触达，并完成现场安全确认后才能执行。
+
+随时停止：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/Projects/lerobot/franka_project/ros2_ws/install/setup.bash
+
+ros2 service call /franka_cartesian_safety_gateway/set_armed \
+  std_srvs/srv/SetBool '{data: false}'
+```
+
+完全停栈：
+
+```bash
+bash ~/franka/stop_all.sh --keep-haply-manager
+```
