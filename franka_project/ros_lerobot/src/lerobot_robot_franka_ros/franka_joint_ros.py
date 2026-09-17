@@ -6,15 +6,21 @@ from lerobot.robots import Robot
 from lerobot.types import RobotAction, RobotObservation
 from lerobot.utils.decorators import check_if_already_connected, check_if_not_connected
 
-from .contract import CAMERA_NAMES, CAMERA_SHAPE
+from .contract import CAMERA_NAMES, CAMERA_SHAPE, STATE_NAMES
 from .joint_config_franka_ros import FrankaJointRosConfig
-from .joint_contract import JOINT_ACTION_NAMES, JOINT_STATE_NAMES, validate_joint_action
+from .joint_contract import (
+    EEF_ACTION_NAMES,
+    JOINT_ACTION_NAMES,
+    JOINT_STATE_NAMES,
+    validate_eef_action,
+    validate_joint_action,
+)
 from .joint_dry_run import JointDryRunBackend
 from .joint_ros2_backend import JointRos2Backend
 
 
 class FrankaJointRos(Robot):
-    """Franka joint-space adapter with dry-run and isolated, non-actuating ROS2 backends."""
+    """Franka adapter publishing q-pos chunks directly or after local EEF IK."""
 
     config_class = FrankaJointRosConfig
     name = "franka_ros_joint"
@@ -33,13 +39,15 @@ class FrankaJointRos(Robot):
 
     @property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
-        state = dict.fromkeys(JOINT_STATE_NAMES, float)
+        state_names = STATE_NAMES if self.config.action_space == "eef" else JOINT_STATE_NAMES
+        state = dict.fromkeys(state_names, float)
         cameras = dict.fromkeys(CAMERA_NAMES, CAMERA_SHAPE)
         return {**state, **cameras}
 
     @property
     def action_features(self) -> dict[str, type]:
-        return dict.fromkeys(JOINT_ACTION_NAMES, float)
+        names = EEF_ACTION_NAMES if self.config.action_space == "eef" else JOINT_ACTION_NAMES
+        return dict.fromkeys(names, float)
 
     @property
     def is_connected(self) -> bool:
@@ -66,7 +74,10 @@ class FrankaJointRos(Robot):
 
     @check_if_not_connected
     def send_action(self, action: RobotAction) -> RobotAction:
-        ordered_action = validate_joint_action(action)
+        if self.config.action_space == "eef":
+            ordered_action = validate_eef_action(action)
+        else:
+            ordered_action = validate_joint_action(action)
         return self._backend.send_action(ordered_action)
 
     @check_if_not_connected
@@ -78,7 +89,7 @@ class FrankaJointRos(Robot):
         source_observation_timestamp: float,
         period_s: float,
     ):
-        """Publish one complete absolute joint-space plan through the isolated ROS2 topic."""
+        """Publish one complete plan through the joint gateway ROS2 topic."""
 
         if not isinstance(self._backend, JointRos2Backend):
             raise RuntimeError("Action chunk publication is only available in ROS2 interface mode")

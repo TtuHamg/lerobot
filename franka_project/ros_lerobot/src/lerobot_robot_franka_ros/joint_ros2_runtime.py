@@ -11,9 +11,9 @@ The runtime deliberately stops at an isolated ROS interface:
 * complete absolute joint-space chunks are published under ``/lerobot``;
 * no controller, action client, IK solver, or hardware command is created here.
 
-Unlike the Cartesian runtime, this variant subscribes to the raw joint state
-(seven arm joints plus one raw gripper joint position) and does not consume the
-end-effector pose.
+In ``qpos`` mode the policy state is seven arm joints plus one raw gripper
+position. In ``eef`` mode the runtime additionally consumes the measured TCP
+pose and exposes xyz+rotation-6D+normalized gripper state.
 """
 
 from __future__ import annotations
@@ -26,7 +26,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .joint_ros2_contract import JointActionChunk, JointObservationCache
-from .ros2_contract import ImageSample, JointStateSample
+from .ros2_contract import (
+    ImageSample,
+    JointStateSample,
+    PoseSample,
+    RosObservationCache,
+)
 
 if TYPE_CHECKING:
     from .joint_config_franka_ros import FrankaJointRosConfig
@@ -107,6 +112,7 @@ class _RosBindings:
     reliability_policy: Any
     durability_policy: Any
     image_type: type
+    pose_stamped_type: type
     joint_state_type: type
     action_chunk_type: type
     action_chunk_ack_type: type
@@ -118,6 +124,7 @@ def _load_ros_bindings() -> _RosBindings:
 
     try:
         import rclpy
+        from geometry_msgs.msg import PoseStamped
         from lerobot_franka_interfaces.msg import (
             JointActionChunk as JointActionChunkMsg,
             JointActionChunkAck,
@@ -150,6 +157,7 @@ def _load_ros_bindings() -> _RosBindings:
         reliability_policy=ReliabilityPolicy,
         durability_policy=DurabilityPolicy,
         image_type=Image,
+        pose_stamped_type=PoseStamped,
         joint_state_type=JointState,
         action_chunk_type=JointActionChunkMsg,
         action_chunk_ack_type=JointActionChunkAck,
@@ -202,7 +210,11 @@ def _set_duration_message(message: Any, nanoseconds: int) -> None:
 class JointRos2Runtime:
     """Own one private rclpy context and a bounded executor thread."""
 
-    def __init__(self, config: FrankaJointRosConfig, cache: JointObservationCache):
+    def __init__(
+        self,
+        config: FrankaJointRosConfig,
+        cache: JointObservationCache | RosObservationCache,
+    ):
         self.config = config
         self.cache = cache
         self._lifecycle_lock = threading.RLock()
@@ -299,10 +311,31 @@ class JointRos2Runtime:
                         sensor_qos,
                     ),
                 ]
-                subscriptions.extend([
-                    node.create_subscription(bindings.action_chunk_ack_type, self.config.action_chunk_ack_topic, self._action_chunk_ack_callback, action_qos),
-                    node.create_subscription(bindings.safety_gateway_status_type, self.config.safety_gateway_status_topic, self._safety_gateway_status_callback, action_qos),
-                ])
+                if self.config.action_space == "eef":
+                    subscriptions.append(
+                        node.create_subscription(
+                            bindings.pose_stamped_type,
+                            self.config.eef_pose_topic,
+                            self._eef_callback,
+                            sensor_qos,
+                        )
+                    )
+                subscriptions.extend(
+                    [
+                        node.create_subscription(
+                            bindings.action_chunk_ack_type,
+                            self.config.action_chunk_ack_topic,
+                            self._action_chunk_ack_callback,
+                            action_qos,
+                        ),
+                        node.create_subscription(
+                            bindings.safety_gateway_status_type,
+                            self.config.safety_gateway_status_topic,
+                            self._safety_gateway_status_callback,
+                            action_qos,
+                        ),
+                    ]
+                )
                 publisher = node.create_publisher(
                     bindings.action_chunk_type,
                     self.config.action_chunk_topic,
@@ -377,6 +410,37 @@ class JointRos2Runtime:
         except Exception as error:  # A bad sample is fail-closed, not an executor failure.
             self._log_callback_error(name, error)
 
+    def _eef_callback(self, message: Any) -> None:
+        if not isinstance(self.cache, RosObservationCache):
+            self._log_callback_error(
+                "eef",
+                RuntimeError("received an EEF pose while action_space is not eef"),
+            )
+            return
+        try:
+            position = message.pose.position
+            orientation = message.pose.orientation
+            self.cache.update_eef(
+                PoseSample(
+                    stamp_ns=_message_stamp_ns(message),
+                    received_monotonic_ns=time.monotonic_ns(),
+                    position=(
+                        float(position.x),
+                        float(position.y),
+                        float(position.z),
+                    ),
+                    quaternion_xyzw=(
+                        float(orientation.x),
+                        float(orientation.y),
+                        float(orientation.z),
+                        float(orientation.w),
+                    ),
+                    frame_id=str(message.header.frame_id),
+                )
+            )
+        except Exception as error:
+            self._log_callback_error("eef", error)
+
     @staticmethod
     def _joint_state_sample(message: Any) -> JointStateSample:
         return JointStateSample(
@@ -410,6 +474,18 @@ class JointRos2Runtime:
             joint_position = positions[joint_index]
             if not math.isfinite(joint_position):
                 raise ValueError("gripper joint position is NaN or Inf")
+            if self.config.action_space == "eef":
+                span = float(self.config.gripper_command_max_position) - float(
+                    self.config.gripper_command_min_position
+                )
+                closed_0_1 = (joint_position - float(self.config.gripper_command_min_position)) / span
+                self.cache.update_gripper(
+                    min(max(closed_0_1, 0.0), 1.0),
+                    stamp_ns=_message_stamp_ns(message),
+                    received_monotonic_ns=time.monotonic_ns(),
+                )
+                return
+
             model_position = joint_position
             if self.config.gripper_model_open_high:
                 model_position = _physical_gripper_to_open_high(
@@ -601,7 +677,17 @@ class JointRos2Runtime:
         message.timesteps = list(chunk.timesteps)
         # positions is a flattened row-major [K*7] array of absolute joint angles.
         message.positions = [float(value) for value in chunk.positions.reshape(-1)]
-        if self.config.gripper_model_open_high:
+        if self.config.action_space == "eef":
+            # The backend has already mapped normalized EEF close fractions
+            # into physical Robotiq positions. Do not apply q-pos checkpoint
+            # conventions a second time.
+            gripper, raw_min, raw_max, clamped_count = _clamp_continuous_gripper_commands(
+                chunk.gripper,
+                minimum=float(self.config.gripper_command_min_position),
+                maximum=float(self.config.gripper_command_max_position),
+            )
+            convention = "EEF closed_0_1 -> Robotiq"
+        elif self.config.gripper_model_open_high:
             gripper, raw_min, raw_max, clamped_count = (
                 _open_high_gripper_commands_to_physical(
                     chunk.gripper,

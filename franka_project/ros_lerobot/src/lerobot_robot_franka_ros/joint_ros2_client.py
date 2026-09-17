@@ -1,4 +1,4 @@
-"""Franka joint-space async client hook for publishing complete ROS2 action chunks."""
+"""Franka q-pos/EEF async client hook for complete Joint Gateway chunks."""
 
 import logging
 import threading
@@ -17,12 +17,13 @@ from .joint_config_franka_ros import FrankaJointRosConfig
 
 
 class FrankaJointRos2RobotClient(RobotClient):
-    """Stock async client plus one project-local complete-chunk publication hook.
+    """Stock async client plus one Joint Gateway complete-chunk hook.
 
     The base client still owns gRPC, observation streaming, queue aggregation,
     timing, and bookkeeping.  This subclass only exposes each accepted server
-    chunk to the non-actuating ROS2 interface before the base control loop
-    consumes its waypoints one at a time.
+    chunk to the ROS2 interface before the base control loop consumes its
+    waypoints. The backend either forwards q-pos or converts absolute EEF
+    rotation-6D actions through local IK first.
     """
 
     def __init__(self, config: RobotClientConfig):
@@ -33,7 +34,7 @@ class FrankaJointRos2RobotClient(RobotClient):
         if not config.robot.ros2_interface_only:
             raise ValueError("FrankaJointRos2RobotClient only supports ros2_interface_only=true")
         if config.aggregate_fn_name != "latest_only":
-            raise ValueError("ROS2 joint chunks require aggregate_fn_name=latest_only")
+            raise ValueError("ROS2 Joint Gateway chunks require aggregate_fn_name=latest_only")
         super().__init__(config)
         if not isinstance(self.robot, FrankaJointRos):
             raise TypeError("franka_ros_joint plugin did not construct a FrankaJointRos instance")
@@ -83,7 +84,7 @@ class FrankaJointRos2RobotClient(RobotClient):
 
 @draccus.wrap()
 def ros2_joint_async_client(cfg: RobotClientConfig) -> None:
-    """Run the standard async loops with the Franka joint-space chunk hook enabled."""
+    """Run the async loops with the Franka Joint Gateway chunk hook enabled."""
 
     logging.info(pformat(asdict(cfg)))
     client = FrankaJointRos2RobotClient(cfg)
@@ -91,7 +92,10 @@ def ros2_joint_async_client(cfg: RobotClientConfig) -> None:
         client.stop()
         return
 
-    client.logger.info("Starting action receiver thread with ROS2 joint chunk publication")
+    client.logger.info(
+        "Starting action receiver thread with ROS2 %s chunk publication",
+        cfg.robot.action_space,
+    )
     action_receiver_thread = threading.Thread(
         target=client.receive_actions,
         name="franka-ros2-joint-action-receiver",

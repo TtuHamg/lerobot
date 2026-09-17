@@ -1,0 +1,236 @@
+diff -ruN original/CMakeLists.txt franka_arm_controllers/CMakeLists.txt
+--- original/CMakeLists.txt	2026-08-03 18:41:54.280683952 +0800
++++ franka_arm_controllers/CMakeLists.txt	2026-09-17 16:57:39.436649303 +0800
+@@ -123,6 +123,11 @@
+   )
+   target_include_directories(safety_command_limits_test PUBLIC include)
+ 
++  ament_add_gtest(safety_position_hold_test
++    test/safety_position_hold_test.cpp
++  )
++  target_include_directories(safety_position_hold_test PUBLIC include)
++
+   set(CPP_DIRECTORIES src include test)
+ 
+   ament_cppcheck(${CPP_DIRECTORIES})
+diff -ruN original/include/franka_arm_controllers/joint_impedance_ik_controller.hpp franka_arm_controllers/include/franka_arm_controllers/joint_impedance_ik_controller.hpp
+--- original/include/franka_arm_controllers/joint_impedance_ik_controller.hpp	2026-07-08 14:13:14.000000000 +0800
++++ franka_arm_controllers/include/franka_arm_controllers/joint_impedance_ik_controller.hpp	2026-09-17 16:57:38.945626458 +0800
+@@ -27,6 +27,7 @@
+ #include <controller_interface/controller_interface.hpp>
+ #include <franka_arm_controllers/robot_utils.hpp>
+ #include <franka_arm_controllers/safety_command_limits.hpp>
++#include <franka_arm_controllers/safety_position_hold.hpp>
+ #include <franka_safety_interfaces/msg/safe_joint_command.hpp>
+ #include <franka_safety_interfaces/msg/safety_command_feedback.hpp>
+ #include <geometry_msgs/msg/pose.hpp>
+@@ -413,6 +414,7 @@
+   bool safety_require_fresh_{true};
+   bool safety_position_initialized_{false};
+   bool safety_torque_initialized_{false};
++  safety_command::PositionHold safety_position_hold_;
+   safety_command::JointArray safety_previous_position_{};
+   safety_command::JointArray safety_previous_torque_{};
+   std::array<std::atomic<double>, 7> safety_measured_positions_a_{};
+diff -ruN original/include/franka_arm_controllers/safety_position_hold.hpp franka_arm_controllers/include/franka_arm_controllers/safety_position_hold.hpp
+--- original/include/franka_arm_controllers/safety_position_hold.hpp	1970-01-01 08:00:00.000000000 +0800
++++ franka_arm_controllers/include/franka_arm_controllers/safety_position_hold.hpp	2026-09-17 16:57:38.715615757 +0800
+@@ -0,0 +1,47 @@
++// Copyright (c) 2026 Franka Robotics GmbH
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#pragma once
++
++#include <franka_arm_controllers/safety_command_limits.hpp>
++
++namespace franka_arm_controllers::safety_command {
++
++// Capture the measured pose once when a model/rest stream stops. Refreshing
++// this pose every cycle would eliminate the impedance controller's restoring
++// torque and allow the arm to drift while waiting for the next command.
++class PositionHold {
++ public:
++  JointArray resolve(bool has_fresh_target,
++                     const JointArray& requested,
++                     const JointArray& measured) noexcept {
++    if (has_fresh_target) {
++      holding_ = false;
++      return requested;
++    }
++    if (!holding_) {
++      position_ = measured;
++      holding_ = true;
++    }
++    return position_;
++  }
++
++  void reset() noexcept { holding_ = false; }
++
++ private:
++  bool holding_{false};
++  JointArray position_{};
++};
++
++}  // namespace franka_arm_controllers::safety_command
+diff -ruN original/src/joint_impedance_ik_controller.cpp franka_arm_controllers/src/joint_impedance_ik_controller.cpp
+--- original/src/joint_impedance_ik_controller.cpp	2026-08-03 18:41:54.281184845 +0800
++++ franka_arm_controllers/src/joint_impedance_ik_controller.cpp	2026-09-17 16:57:39.199638276 +0800
+@@ -569,9 +569,6 @@
+                       safety_previous_position_.begin());
+           safety_position_initialized_ = true;
+         }
+-      } else {
+-        joint_positions_desired_ = joint_positions_current_;
+-        safety_position_initialized_ = false;
+       }
+       safety_rest_replay_active_ = rest_replay_applied;
+       if (command != nullptr && command->valid && !fresh && !safety_stale_reported_) {
+@@ -653,6 +650,21 @@
+   desired_linear_position_update_.setZero();
+   desired_angular_position_update_.setZero();
+ 
++  if (command_source_ == CommandSource::kSafetyGateway) {
++    const bool has_fresh_target = safety_command_active || safety_rest_replay_active_;
++    safety_command::JointArray measured{};
++    std::copy_n(joint_positions_current_.begin(), num_joints_, measured.begin());
++    auto requested = measured;
++    if (has_fresh_target) {
++      std::copy_n(joint_positions_desired_.begin(), num_joints_, requested.begin());
++    }
++    // Startup, disarm, expired input, and completed rest all latch the measured
++    // pose once. New valid model/rest input releases HOLD through the existing
++    // source arbitration and position/torque slew limits.
++    const auto target = safety_position_hold_.resolve(has_fresh_target, requested, measured);
++    joint_positions_desired_.assign(target.begin(), target.end());
++  }
++
+   if (joint_positions_desired_.empty()) {
+     joint_positions_desired_ = joint_positions_current_;
+     publish_teleop_state_(time, std::max(0.0, period.seconds()));
+@@ -677,7 +689,9 @@
+       joint_positions_desired_.assign(safety_previous_position_.begin(),
+                                       safety_previous_position_.end());
+     } else {
+-      std::copy_n(joint_positions_current_.begin(), num_joints_, safety_previous_position_.begin());
++      // Resume future commands from the held target, even if an external
++      // disturbance has displaced the measured joints while waiting.
++      std::copy_n(joint_positions_desired_.begin(), num_joints_, safety_previous_position_.begin());
+     }
+   }
+ 
+@@ -1387,6 +1401,12 @@
+   safety_require_fresh_ = true;
+   safety_position_initialized_ = false;
+   safety_torque_initialized_ = false;
++  safety_position_hold_.reset();
++  safety_rest_replay_active_ = false;
++  safety_last_active_apply_steady_ns_ = 0;
++  safety_rest_target_rt_.clear();
++  joint_replay_last_received_ns_.store(0, std::memory_order_release);
++  joint_replay_pending_.store(false, std::memory_order_release);
+ 
+   return CallbackReturn::SUCCESS;
+ }
+diff -ruN original/test/safety_position_hold_test.cpp franka_arm_controllers/test/safety_position_hold_test.cpp
+--- original/test/safety_position_hold_test.cpp	1970-01-01 08:00:00.000000000 +0800
++++ franka_arm_controllers/test/safety_position_hold_test.cpp	2026-09-17 16:57:39.703661726 +0800
+@@ -0,0 +1,88 @@
++// Copyright (c) 2026 Franka Robotics GmbH
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include <gtest/gtest.h>
++
++#include <franka_arm_controllers/safety_position_hold.hpp>
++
++namespace {
++
++using franka_arm_controllers::safety_command::JointArray;
++using franka_arm_controllers::safety_command::PositionHold;
++
++const JointArray kInitial{0.1, -0.1, 0.2, -1.6, 0.0, 1.6, -0.1};
++const JointArray kMoved{0.2, -0.2, 0.3, -1.5, 0.1, 1.5, 0.0};
++const JointArray kTarget{0.3, -0.3, 0.4, -1.4, 0.2, 1.4, 0.1};
++
++TEST(SafetyPositionHold, StartupResistsDisplacementWhileWaitingForFirstCommand) {
++  PositionHold hold;
++  EXPECT_EQ(hold.resolve(false, {}, kInitial), kInitial);
++  for (int cycle = 0; cycle < 1000; ++cycle) {
++    const auto target = hold.resolve(false, {}, kMoved);
++    EXPECT_EQ(target, kInitial);
++    // With nonzero stiffness this error produces a restoring torque. Updating
++    // the target to kMoved each cycle would zero it and reproduce the bug.
++    EXPECT_LT(target[0] - kMoved[0], 0.0);
++    EXPECT_GT(target[1] - kMoved[1], 0.0);
++  }
++}
++
++TEST(SafetyPositionHold, DisarmOrTimeoutHoldsMeasuredPoseInsteadOfChasingOldCommand) {
++  PositionHold hold;
++  EXPECT_EQ(hold.resolve(true, kTarget, kInitial), kTarget);
++  EXPECT_EQ(hold.resolve(false, kTarget, kMoved), kMoved);
++  EXPECT_EQ(hold.resolve(false, kTarget, kInitial), kMoved);
++}
++
++TEST(SafetyPositionHold, FreshInputReleasesHoldAndNextStopCapturesNewPose) {
++  PositionHold hold;
++  EXPECT_EQ(hold.resolve(false, {}, kInitial), kInitial);
++  EXPECT_EQ(hold.resolve(true, kTarget, kMoved), kTarget);
++  EXPECT_EQ(hold.resolve(true, kMoved, kTarget), kMoved);
++  EXPECT_EQ(hold.resolve(false, kMoved, kTarget), kTarget);
++  EXPECT_EQ(hold.resolve(false, kMoved, kInitial), kTarget);
++}
++
++TEST(SafetyPositionHold, RestCanRunWhileDisarmedAndItsEndpointRemainsHeld) {
++  PositionHold hold;
++  EXPECT_EQ(hold.resolve(false, {}, kMoved), kMoved);
++  // The controller treats a fresh explicit rest stream as a valid target
++  // independently of model arming. Losing that stream returns to HOLD.
++  EXPECT_EQ(hold.resolve(true, kInitial, kMoved), kInitial);
++  EXPECT_EQ(hold.resolve(true, kInitial, kInitial), kInitial);
++  EXPECT_EQ(hold.resolve(false, kInitial, kInitial), kInitial);
++  EXPECT_EQ(hold.resolve(false, {}, kMoved), kInitial);
++}
++
++TEST(SafetyPositionHold, ReactivationCapturesCurrentPoseInsteadOfPreviousHold) {
++  PositionHold hold;
++  EXPECT_EQ(hold.resolve(false, {}, kInitial), kInitial);
++  hold.reset();
++  EXPECT_EQ(hold.resolve(false, {}, kMoved), kMoved);
++  EXPECT_EQ(hold.resolve(false, {}, kInitial), kMoved);
++}
++
++TEST(SafetyPositionHold, ResumedCommandStillUsesPositionSlewLimit) {
++  PositionHold hold;
++  const auto held = hold.resolve(false, {}, kInitial);
++  const auto requested = hold.resolve(true, kTarget, kMoved);
++  const auto limited = franka_arm_controllers::safety_command::limit_position_slew(
++      requested, held, 0.001, 0.35, 0.001);
++  for (std::size_t joint = 0; joint < held.size(); ++joint) {
++    EXPECT_NEAR(limited[joint], held[joint] + (requested[joint] > held[joint] ? 0.00035 : -0.00035),
++                1e-12);
++  }
++}
++
++}  // namespace

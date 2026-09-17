@@ -68,6 +68,30 @@ python -m lerobot_robot_franka_ros.ros2_client ... \
 ROS imports remain lazy. Build and source `../ros2_ws` only before starting the ROS2 mode; importing
 the plugin or running dry-run does not require `rclpy`.
 
+## Joint Gateway client: q-pos and EEF
+
+The `franka_ros_joint` plugin and `joint_ros2_client` share the execution ACK,
+timeout, and Joint Gateway path for two policy contracts:
+
+- `--robot.action_space=qpos` (default): state/action are seven joint positions
+  plus the checkpoint-specific gripper value.
+- `--robot.action_space=eef`: state/action are
+  `[xyz, rot6d.col0, rot6d.col1, gripper.closed_0_1]`. The client applies
+  Gram-Schmidt to each network rotation, derives the live link8-to-TCP
+  transform from measured q-pos/EEF pose, solves the complete chunk with
+  warm-started Pinocchio IK, and publishes the resulting `JointActionChunk`.
+
+The machine-local wrapper keeps q-pos behavior unchanged:
+
+```bash
+bash franka_project/scripts/run_joint_client.sh --qpos "Pick up the cup."
+bash franka_project/scripts/run_joint_client.sh --eef "stack the red block"
+```
+
+EEF mode requires `~/franka/config/fr3_ik.urdf` (override with `IK_URDF`) and a
+Python environment containing `pinocchio`. It still requires the separately
+started and explicitly armed Joint Gateway; the client never arms hardware.
+
 Use the complete, fixed 15 Hz client/server commands in
 [`../ASYNC_CLIENT_SERVER_RUNBOOK.md`](../ASYNC_CLIENT_SERVER_RUNBOOK.md). In particular, the camera
 `rename_map` and `aggregate_fn_name=latest_only` remain required parts of the inference contract.

@@ -11,7 +11,9 @@ In execute mode the eighth model value is range-checked and sent to the Robotiq
 gripper action server. The command range is 0.0=open to 0.8=closed with effort
 20. An ABORTED close goal at or above 0.5 is treated as nonfatal object contact
 while the final close target remains commanded; opening-side failures still
-HOLD.
+HOLD. Closing targets use a 0.25 s lookahead on the retimed arm trajectory,
+with 0.005 deadband and 0.10 s minimum command interval; opening never looks
+ahead.
 
 ## Low-speed joint safety boundary
 
@@ -26,9 +28,11 @@ acceleration, and 0.80 rad total excursion envelope. Two consecutive 30 Hz
 samples above 0.55 rad/s,
 joint-state loss, non-stale controller rejection, or endpoint loss immediately
 HOLD and clear the active plan. Isolated stale/expired feedback and command
-timer gaps only warn; a fresh feedback/normal timer tick resets its respective
-counter, and three consecutive failures HOLD. The 1 kHz controller
-independently limits target slew to 0.35 rad/s.
+timer gaps only warn. Stale feedback starts a 250 ms recovery window; any fresh
+applied sequence clears it, otherwise the Gateway HOLDs when the window
+expires. A normal timer tick resets the timer-gap counter, and three consecutive
+timer gaps HOLD. The 1 kHz controller independently limits target slew to
+0.35 rad/s.
 
 This still does not prevent a slow collision with a box, table, camera, or the
 robot itself. Operators must clear the workspace and keep the physical e-stop

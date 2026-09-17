@@ -13,13 +13,12 @@ PLUGIN_SRC = Path(__file__).parents[1] / "ros_lerobot" / "src"
 if str(PLUGIN_SRC) not in sys.path:
     sys.path.insert(0, str(PLUGIN_SRC))
 
-from lerobot.robots.config import RobotConfig  # noqa: E402
-from lerobot.robots.utils import make_robot_from_config  # noqa: E402
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError  # noqa: E402
 from lerobot_robot_franka_ros import (  # noqa: E402
     CAMERA_SHAPE,
+    EEF_ACTION_NAMES,
     JOINT_ACTION_NAMES,
     JOINT_STATE_NAMES,
+    STATE_NAMES,
     FrankaJointRos,
     FrankaJointRosConfig,
 )
@@ -29,6 +28,10 @@ from lerobot_robot_franka_ros.joint_ros2_runtime import (  # noqa: E402
     _open_high_gripper_commands_to_physical,
     _physical_gripper_to_open_high,
 )
+
+from lerobot.robots.config import RobotConfig  # noqa: E402
+from lerobot.robots.utils import make_robot_from_config  # noqa: E402
+from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError  # noqa: E402
 
 
 def _write_fixture(path: Path, **overrides: np.ndarray) -> None:
@@ -77,6 +80,30 @@ def test_plugin_registration_factory_and_feature_contract(tmp_path: Path) -> Non
     assert all(robot.observation_features[name] is float for name in JOINT_STATE_NAMES)
     assert robot.observation_features["camera1"] == CAMERA_SHAPE
     assert robot.observation_features["camera2"] == CAMERA_SHAPE
+
+
+def test_live_eef_mode_switches_to_state10_and_rot6d_action10(tmp_path: Path) -> None:
+    config = FrankaJointRosConfig(
+        id="eef-contract",
+        calibration_dir=tmp_path / "calibration",
+        dry_run=False,
+        action_space="eef",
+    )
+    robot = FrankaJointRos(config)
+
+    assert tuple(robot.observation_features) == (*STATE_NAMES, "camera1", "camera2")
+    assert tuple(robot.action_features) == EEF_ACTION_NAMES
+
+
+def test_action_space_rejects_unknown_and_eef_dry_run_modes(tmp_path: Path) -> None:
+    common = {
+        "id": "bad-action-space",
+        "calibration_dir": tmp_path / "calibration",
+    }
+    with pytest.raises(ValueError, match="action_space must be"):
+        FrankaJointRosConfig(**common, action_space="cartesian")
+    with pytest.raises(ValueError, match="dry_run currently supports only"):
+        FrankaJointRosConfig(**common, action_space="eef")
 
 
 def test_lifecycle_fixture_copies_and_jsonl_sink(tmp_path: Path) -> None:
@@ -282,13 +309,11 @@ def test_0804_open_high_gripper_conversion_is_bidirectional() -> None:
         model_open_position=0.944,
     ) == pytest.approx(0.0)
 
-    physical, raw_min, raw_max, clamped_count = (
-        _open_high_gripper_commands_to_physical(
-            [0.944, 0.472, 0.0],
-            hardware_minimum=0.0,
-            hardware_maximum=0.8,
-            model_open_position=0.944,
-        )
+    physical, raw_min, raw_max, clamped_count = _open_high_gripper_commands_to_physical(
+        [0.944, 0.472, 0.0],
+        hardware_minimum=0.0,
+        hardware_maximum=0.8,
+        model_open_position=0.944,
     )
     assert physical == pytest.approx([0.0, 0.4, 0.8])
     assert raw_min == pytest.approx(0.0)

@@ -19,8 +19,8 @@ PLUGIN_SRC = Path(__file__).parents[1] / "ros_lerobot" / "src"
 if str(PLUGIN_SRC) not in sys.path:
     sys.path.insert(0, str(PLUGIN_SRC))
 
-from lerobot.async_inference.helpers import TimedAction  # noqa: E402
-from lerobot_robot_franka_ros.contract import CAMERA_SHAPE  # noqa: E402
+from lerobot_robot_franka_ros.contract import CAMERA_SHAPE, STATE_NAMES  # noqa: E402
+from lerobot_robot_franka_ros.eef_ik import decode_eef_actions  # noqa: E402
 from lerobot_robot_franka_ros.joint_config_franka_ros import FrankaJointRosConfig  # noqa: E402
 from lerobot_robot_franka_ros.joint_contract import JOINT_STATE_NAMES  # noqa: E402
 from lerobot_robot_franka_ros.joint_ros2_backend import (  # noqa: E402
@@ -28,7 +28,13 @@ from lerobot_robot_franka_ros.joint_ros2_backend import (  # noqa: E402
     JointRos2BackendError,
 )
 from lerobot_robot_franka_ros.joint_ros2_client import FrankaJointRos2RobotClient  # noqa: E402
-from lerobot_robot_franka_ros.ros2_contract import ImageSample, JointStateSample  # noqa: E402
+from lerobot_robot_franka_ros.ros2_contract import (  # noqa: E402
+    ImageSample,
+    JointStateSample,
+    PoseSample,
+)
+
+from lerobot.async_inference.helpers import TimedAction  # noqa: E402
 
 
 def test_joint_ros2_client_cli_help_is_parseable_without_ros() -> None:
@@ -49,6 +55,8 @@ def test_joint_ros2_client_cli_help_is_parseable_without_ros() -> None:
     assert result.returncode == 0, result.stderr
     assert "--robot.ros2_interface_only" in result.stdout
     assert "--robot.action_chunk_topic" in result.stdout
+    assert "--robot.action_space" in result.stdout
+    assert "--robot.ik_urdf_path" in result.stdout
 
 
 class _ManualClock:
@@ -93,7 +101,12 @@ def _ros2_config(tmp_path) -> FrankaJointRosConfig:
     )
 
 
-def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
+def _populate_observation(
+    runtime: _FakeRuntime,
+    clock: _ManualClock,
+    *,
+    gripper: float = 1.23,
+) -> None:
     anchor_stamp = 2_000_000_000
     arrival = clock.nanoseconds - 10_000_000
     camera1 = np.zeros(CAMERA_SHAPE, dtype=np.uint8)
@@ -125,7 +138,7 @@ def _populate_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
     )
     # FastWAM uses the raw gripper joint position; it is not normalized to [0, 1].
     runtime.cache.update_gripper(
-        1.23,
+        gripper,
         stamp_ns=anchor_stamp - 2_000_000,
         received_monotonic_ns=arrival,
     )
@@ -232,6 +245,128 @@ def test_joint_backend_rejects_bad_chunk_without_publish(tmp_path) -> None:
             period_s=1.0 / 15.0,
         )
     assert runtime.published == []
+    backend.disconnect()
+
+
+class _FakeEefIk:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def solve_actions(
+        self,
+        actions,
+        *,
+        measured_q,
+        measured_eef_position,
+        measured_eef_quaternion_xyzw,
+    ):
+        positions, rotations, _ = decode_eef_actions(actions)
+        self.calls.append(
+            (
+                np.asarray(actions).copy(),
+                np.asarray(measured_q).copy(),
+                np.asarray(measured_eef_position).copy(),
+                np.asarray(measured_eef_quaternion_xyzw).copy(),
+                rotations.copy(),
+            )
+        )
+        return np.stack(
+            (
+                np.asarray(measured_q) + positions[0, 0] * 0.01,
+                np.asarray(measured_q) + positions[1, 0] * 0.01,
+            )
+        )
+
+
+def _populate_eef_observation(runtime: _FakeRuntime, clock: _ManualClock) -> None:
+    _populate_observation(runtime, clock, gripper=0.5)
+    anchor_stamp = 2_000_000_000
+    arrival = clock.nanoseconds - 10_000_000
+    runtime.cache.update_eef(
+        PoseSample(
+            stamp_ns=anchor_stamp - 5_000_000,
+            received_monotonic_ns=arrival,
+            position=np.asarray([0.4, -0.1, 0.5]),
+            quaternion_xyzw=np.asarray([0.0, 0.0, 0.0, 1.0]),
+            frame_id="base",
+        )
+    )
+
+
+def _timed_eef_chunk(*, timestep: int = 4, source_timestamp: float = 1_768_000_000.0):
+    period = 1.0 / 30.0
+    server_send = source_timestamp + 0.2
+    rows = (
+        [0.4, -0.1, 0.5, 2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.25],
+        [0.5, -0.2, 0.6, 0.0, 2.0, 0.0, 0.0, 1.0, 3.0, 1.2],
+    )
+    return [
+        TimedAction(
+            timestamp=source_timestamp + index * period,
+            timestep=timestep + index,
+            action=torch.tensor(row, dtype=torch.float32),
+            server_send_timestamp=server_send,
+        )
+        for index, row in enumerate(rows)
+    ]
+
+
+def test_eef_backend_exposes_state10_and_publishes_ik_joint_chunk(tmp_path) -> None:
+    config = FrankaJointRosConfig(
+        id="ros2-eef-test",
+        calibration_dir=tmp_path / "calibration",
+        dry_run=False,
+        action_space="eef",
+        ik_urdf_path=tmp_path / "unused.urdf",
+    )
+    clock = _ManualClock(10_000_000_000)
+    runtimes: list[_FakeRuntime] = []
+    fake_ik = _FakeEefIk()
+
+    def runtime_factory(runtime_config, cache):
+        runtime = _FakeRuntime(runtime_config, cache)
+        runtimes.append(runtime)
+        return runtime
+
+    backend = JointRos2Backend(
+        config=config,
+        runtime_factory=runtime_factory,
+        eef_ik_factory=lambda _: fake_ik,
+        monotonic_ns=clock,
+    )
+    backend.connect()
+    runtime = runtimes[0]
+    _populate_eef_observation(runtime, clock)
+
+    observation = backend.get_observation()
+    assert tuple(observation) == (*STATE_NAMES, "camera1", "camera2")
+    assert tuple(observation[name] for name in STATE_NAMES[:3]) == pytest.approx((0.4, -0.1, 0.5))
+    assert tuple(observation[name] for name in STATE_NAMES[3:9]) == pytest.approx(
+        (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    )
+    assert observation["gripper.closed_0_1"] == pytest.approx(0.5)
+
+    timed_actions = _timed_eef_chunk()
+    chunk = backend.publish_action_chunk(
+        timed_actions,
+        source_observation_timestep=4,
+        source_observation_timestamp=timed_actions[0].timestamp,
+        period_s=1.0 / 30.0,
+    )
+
+    assert runtime.published == [chunk]
+    assert chunk.actions.shape == (2, 8)
+    np.testing.assert_allclose(chunk.positions[0], np.arange(7) + 0.004)
+    np.testing.assert_allclose(chunk.positions[1], np.arange(7) + 0.005)
+    np.testing.assert_allclose(chunk.gripper, [0.2, 0.8])
+    assert len(fake_ik.calls) == 1
+    _, measured_q, measured_position, measured_quaternion, rotations = fake_ik.calls[0]
+    np.testing.assert_allclose(measured_q, np.arange(7))
+    np.testing.assert_allclose(measured_position, [0.4, -0.1, 0.5])
+    np.testing.assert_allclose(measured_quaternion, [0.0, 0.0, 0.0, 1.0])
+    np.testing.assert_allclose(rotations[0], np.eye(3), atol=1e-12)
+    np.testing.assert_allclose(np.linalg.det(rotations), 1.0, atol=1e-12)
+
     backend.disconnect()
 
 

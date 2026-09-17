@@ -24,10 +24,11 @@ franka_joint_safety_gateway:
     ack_topic: /lerobot/franka/joint_action_chunk_ack
     status_topic: /lerobot/franka/joint_safety_gateway_status
     safe_command_topic: /franka/safe_joint_command
-    # Controller feedback is status-only in motion-limits-only mode. It never
-    # causes HOLD or rejects an otherwise valid plan.
+    # Non-stale controller rejection HOLDs immediately. Stale/expired feedback
+    # starts a recovery window; a fresh applied sequence clears it.
     safety_feedback_topic: /franka/safety_command_feedback
     feedback_status_timeout_s: 0.10
+    controller_stale_recovery_grace_s: 0.25
 
     # Command range: 0.0=open, 0.8=closed. The measured position may stop below
     # 0.8 on object contact; keep commanding closed to maintain grasp force.
@@ -39,8 +40,11 @@ franka_joint_safety_gateway:
     gripper_max: 0.8
     gripper_max_effort: 20.0
     # Avoid flooding/preempting the action server from the 200 Hz arm loop.
-    gripper_command_deadband: 0.02
-    gripper_min_command_interval_s: 0.15
+    gripper_command_deadband: 0.005
+    gripper_min_command_interval_s: 0.10
+    # Advance only closing targets along the retimed arm timeline. Opening
+    # remains index-aligned so the object is never released early.
+    gripper_close_lookahead_s: 0.25
     # A blocked close goal normally means object contact. Opening-side aborts
     # remain fatal; close-side ABORTED results above this target only warn.
     gripper_contact_abort_nonfatal_min_position: 0.5
@@ -67,9 +71,6 @@ franka_joint_safety_gateway:
     # clear the active plan. This is independent of model/action timing.
     max_measured_joint_velocity_rad_s: 0.55
     overspeed_guard_consecutive_samples: 2
-    # Match Zhouyan: tolerate isolated stale/expired feedback; a fresh applied
-    # sequence resets the counter, while three consecutive stale results HOLD.
-    controller_stale_feedback_consecutive_limit: 3
 
     command_period_ms: 10
     command_deadline_s: 0.100

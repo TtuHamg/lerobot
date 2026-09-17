@@ -35,6 +35,19 @@ JOINT_ACTION_NAMES = (
     "target.gripper.pos",
 )
 
+EEF_ACTION_NAMES = (
+    "target.x",
+    "target.y",
+    "target.z",
+    "target.rot6d.col0.x",
+    "target.rot6d.col0.y",
+    "target.rot6d.col0.z",
+    "target.rot6d.col1.x",
+    "target.rot6d.col1.y",
+    "target.rot6d.col1.z",
+    "target.gripper.closed_0_1",
+)
+
 FIXTURE_KEYS = frozenset(("state", *CAMERA_NAMES))
 
 
@@ -127,10 +140,48 @@ def validate_joint_action(action: dict[str, Any]) -> dict[str, float]:
     return ordered
 
 
+def validate_eef_action(action: dict[str, Any]) -> dict[str, float]:
+    """Validate and canonically order one absolute xyz+rotation-6D target."""
+
+    if not isinstance(action, dict):
+        raise TypeError(f"Action must be a dict, got {type(action).__name__}")
+
+    keys = set(action)
+    expected = set(EEF_ACTION_NAMES)
+    if keys != expected:
+        missing = sorted(expected - keys)
+        extra = sorted(keys - expected)
+        raise ValueError(f"Action keys do not match contract; missing={missing}, extra={extra}")
+
+    ordered: dict[str, float] = {}
+    for name in EEF_ACTION_NAMES:
+        value = action[name]
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise TypeError(f"Action {name!r} must be a real scalar, got {type(value).__name__}")
+        scalar = float(value)
+        if not math.isfinite(scalar):
+            raise ValueError(f"Action {name!r} must be finite, got {scalar}")
+        ordered[name] = scalar
+
+    first = np.asarray([ordered[name] for name in EEF_ACTION_NAMES[3:6]])
+    second = np.asarray([ordered[name] for name in EEF_ACTION_NAMES[6:9]])
+    first_norm = float(np.linalg.norm(first))
+    if first_norm <= 1e-12:
+        raise ValueError("Action rotation-6D first column is degenerate")
+    first /= first_norm
+    second_orthogonal = second - float(np.dot(first, second)) * first
+    if float(np.linalg.norm(second_orthogonal)) <= 1e-12:
+        raise ValueError("Action rotation-6D columns are collinear")
+
+    return ordered
+
+
 __all__ = [
+    "EEF_ACTION_NAMES",
     "JOINT_ACTION_NAMES",
     "JOINT_STATE_NAMES",
     "JointDryRunObservation",
     "load_joint_dry_run_observation",
+    "validate_eef_action",
     "validate_joint_action",
 ]

@@ -99,4 +99,37 @@ python -m lerobot_robot_franka_ros.joint_ros2_client \
 
   ros2 topic echo /lerobot/franka/joint_safety_gateway_status
   
+python tools/start_kml_tunnel_client.py \
+  --listen-port 8081 \
+  --ws-url "wss://kml-dtmachine-26212-prod-0.kmlhb2az1l3-2.corp.kuaishou.com/ws"
+
+https://kml-dtmachine-26212-prod-0.kmlhb2az1l3-2.corp.kuaishou.com/ 
+
+reset:
+bash /home/pnp/franka/rest_now.sh --no-gripper 2>&1 | tee /tmp/franka_rest_last.log
+
+ 可以直接用封装脚本，网络已经启动就不用重复启动。不过还需要相机和最后的 arm。
+
+  1. 启动控制栈和相机：
+
+     bash franka_project/scripts/start_joint_stack.sh --execute --cam
+
+     单独 --execute 默认不开相机。你现在控制栈已运行、已复位，如果相机也正常，这一步直接跳过。
+
+  2. 新终端启动客户端：
+
+     bash franka_project/scripts/run_joint_client.sh "pick up the cup"
+
+     任务文字必须匹配服务端：你给出的 mix3 服务端用 "pick up the cup"；如果服务端配置的是 "Pick up the cup."，就用你原来的写法。
+
+  3. 再开一个终端，允许模型控制：
+
+     bash franka_project/scripts/arm_joint_gateway.sh
    
+bash franka_project/scripts/run_joint_client.sh --eef "stack the red rectangular block on the tower"
+
+     按脚本提示输入 ARM。此前机械臂会保持静止。
+
+  结束时执行你已经验证有效的复位命令，它会先 disarm：
+
+  bash /home/pnp/franka/rest_now.sh --no-gripper

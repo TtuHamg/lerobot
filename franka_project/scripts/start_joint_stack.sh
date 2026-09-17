@@ -5,6 +5,7 @@ set -euo pipefail
 
 MODE=shadow
 WITH_CAM=false
+RESET_GRIPPER=false
 FCI_CPU_AFFINITY="10"
 GATEWAY_CPU_AFFINITY="9"
 QPOS_RELAY_CPU_AFFINITY="7"
@@ -14,9 +15,10 @@ for arg in "$@"; do
     --execute) MODE=execute ;;
     --no-cam) WITH_CAM=false ;;
     --cam) WITH_CAM=true ;;
+    --reset-gripper) RESET_GRIPPER=true ;;
     *)
       echo "Unknown option: $arg"
-      echo "Use --shadow, --execute, --cam, or --no-cam"
+      echo "Use --shadow, --execute, --cam, --no-cam, or --reset-gripper"
       exit 2
       ;;
   esac
@@ -101,6 +103,26 @@ nohup ros2 launch franka_gripper_manager robotiq_gripper_controller_client.launc
 if ! wait_for_topic_publisher /gripper/joint_states 20; then
   echo "ERROR: /gripper/joint_states is unavailable"
   exit 1
+fi
+if [[ "$RESET_GRIPPER" == "true" ]]; then
+  echo "Resetting Robotiq gripper to the default open position (0.0 rad) ..."
+  if ! GRIPPER_RESULT="$(
+      timeout 20 ros2 action send_goal \
+      /gripper/robotiq_gripper_controller/gripper_cmd \
+      control_msgs/action/GripperCommand \
+      '{command: {position: 0.0, max_effort: 16.0}}' \
+      --timeout 15 2>&1
+    )"; then
+    printf '%s\n' "$GRIPPER_RESULT"
+    echo "ERROR: failed to reset the Robotiq gripper"
+    exit 1
+  fi
+  printf '%s\n' "$GRIPPER_RESULT"
+  if [[ "$GRIPPER_RESULT" != *"Goal finished with status: SUCCEEDED"* ]]; then
+    echo "ERROR: failed to reset the Robotiq gripper"
+    exit 1
+  fi
+  echo "Robotiq gripper reset complete."
 fi
 
 if [[ "$WITH_CAM" == "true" ]]; then

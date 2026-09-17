@@ -13,9 +13,15 @@ import numpy as np
 
 from lerobot.types import RobotAction, RobotObservation
 
+from .eef_ik import (
+    EefIkError,
+    PinocchioEefIk,
+    closed_fraction_to_physical,
+    decode_eef_actions,
+)
 from .joint_config_franka_ros import FrankaJointRosConfig
 from .joint_ros2_contract import JointActionChunk, JointObservationCache, JointObservationSnapshot
-
+from .ros2_contract import RosObservationCache, RosObservationSnapshot
 
 _NS_PER_SECOND = 1_000_000_000
 
@@ -37,18 +43,35 @@ class _Ros2Runtime(Protocol):
     def close(self, *, timeout_s: float | None = None) -> None: ...
 
 
-RuntimeFactory = Callable[[FrankaJointRosConfig, JointObservationCache], _Ros2Runtime]
+class _EefIk(Protocol):
+    def solve_actions(
+        self,
+        actions: Any,
+        *,
+        measured_q: Any,
+        measured_eef_position: Any,
+        measured_eef_quaternion_xyzw: Any,
+    ) -> np.ndarray: ...
+
+
+ObservationCache = JointObservationCache | RosObservationCache
+RuntimeFactory = Callable[[FrankaJointRosConfig, ObservationCache], _Ros2Runtime]
+EefIkFactory = Callable[[FrankaJointRosConfig], _EefIk]
 
 
 def _default_runtime_factory(
     config: FrankaJointRosConfig,
-    cache: JointObservationCache,
+    cache: ObservationCache,
 ) -> _Ros2Runtime:
     # This import is the only path from normal plugin code to rclpy/ROS
     # messages. Plugin discovery and dry-run mode therefore stay ROS-free.
     from .joint_ros2_runtime import JointRos2Runtime
 
     return JointRos2Runtime(config, cache)
+
+
+def _default_eef_ik_factory(config: FrankaJointRosConfig) -> _EefIk:
+    return PinocchioEefIk(config)
 
 
 def _seconds_to_ns(value: float, *, name: str) -> int:
@@ -76,24 +99,42 @@ class JointRos2Backend:
         *,
         config: FrankaJointRosConfig,
         runtime_factory: RuntimeFactory | None = None,
+        eef_ik_factory: EefIkFactory | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self.config = config
         self._runtime_factory = runtime_factory or _default_runtime_factory
+        self._eef_ik_factory = eef_ik_factory or _default_eef_ik_factory
         self._monotonic_ns = monotonic_ns
-        self._cache = JointObservationCache(
-            joint_names=config.arm_joint_names,
-            base_frame=config.base_frame,
-            max_skew_ns={
-                "camera2": round(config.camera2_max_skew_s * _NS_PER_SECOND),
-                "qpos": round(config.qpos_max_skew_s * _NS_PER_SECOND),
-                "gripper": round(config.gripper_max_skew_s * _NS_PER_SECOND),
-            },
-            max_age_ns=round(config.max_observation_age_s * _NS_PER_SECOND),
-            buffer_size=config.observation_buffer_size,
-            monotonic_ns=monotonic_ns,
-        )
+        if config.action_space == "eef":
+            self._cache: ObservationCache = RosObservationCache(
+                joint_names=config.arm_joint_names,
+                base_frame=config.base_frame,
+                max_skew_ns={
+                    "camera2": round(config.camera2_max_skew_s * _NS_PER_SECOND),
+                    "eef": round(config.eef_max_skew_s * _NS_PER_SECOND),
+                    "qpos": round(config.qpos_max_skew_s * _NS_PER_SECOND),
+                    "gripper": round(config.gripper_max_skew_s * _NS_PER_SECOND),
+                },
+                max_age_ns=round(config.max_observation_age_s * _NS_PER_SECOND),
+                buffer_size=config.observation_buffer_size,
+                monotonic_ns=monotonic_ns,
+            )
+        else:
+            self._cache = JointObservationCache(
+                joint_names=config.arm_joint_names,
+                base_frame=config.base_frame,
+                max_skew_ns={
+                    "camera2": round(config.camera2_max_skew_s * _NS_PER_SECOND),
+                    "qpos": round(config.qpos_max_skew_s * _NS_PER_SECOND),
+                    "gripper": round(config.gripper_max_skew_s * _NS_PER_SECOND),
+                },
+                max_age_ns=round(config.max_observation_age_s * _NS_PER_SECOND),
+                buffer_size=config.observation_buffer_size,
+                monotonic_ns=monotonic_ns,
+            )
         self._runtime: _Ros2Runtime | None = None
+        self._eef_ik: _EefIk | None = None
         self._session_id: str | None = None
         self._next_plan_id = 0
         self._last_bookkept_action: RobotAction | None = None
@@ -114,6 +155,7 @@ class JointRos2Backend:
         with self._lock:
             if self._runtime is not None:
                 raise JointRos2BackendError("ROS2 interface backend is already connected")
+            eef_ik = self._eef_ik_factory(self.config) if self.config.action_space == "eef" else None
             runtime = self._runtime_factory(self.config, self._cache)
             try:
                 runtime.start()
@@ -126,12 +168,15 @@ class JointRos2Backend:
                     pass
                 raise
             self._runtime = runtime
+            self._eef_ik = eef_ik
             self._session_id = uuid.uuid4().hex
             self._next_plan_id = 0
             self._last_bookkept_action = None
 
-    def get_snapshot(self) -> JointObservationSnapshot:
+    def get_snapshot(self) -> JointObservationSnapshot | RosObservationSnapshot:
         self._require_runtime()
+        if isinstance(self._cache, RosObservationCache):
+            return self._cache.get_snapshot()
         return self._cache.get_joint_snapshot()
 
     def get_observation(self) -> RobotObservation:
@@ -222,16 +267,23 @@ class JointRos2Backend:
         ):
             raise JointRos2BackendError("TimedAction server_send_timestamp values differ within one chunk")
 
+        # Start the local transport TTL before potentially expensive IK. The
+        # runtime will reject the converted plan if IK consumed its validity.
         received_monotonic_ns = int(self._monotonic_ns())
         if received_monotonic_ns <= 0:
             raise JointRos2BackendError("monotonic clock returned a non-positive value")
+
+        stacked_actions = np.stack(action_rows)
+        if self.config.action_space == "eef":
+            stacked_actions = self._eef_actions_to_joint_actions(stacked_actions)
+
         with self._lock:
             session_id = self._session_id
             if session_id is None:
                 raise JointRos2BackendError("ROS2 session id is unavailable")
             plan_id = self._next_plan_id
             chunk = JointActionChunk(
-                actions=np.stack(action_rows),
+                actions=stacked_actions,
                 timesteps=timesteps,
                 source_timestep=int(source_observation_timestep),
                 source_observation_timestamp_ns=_seconds_to_ns(
@@ -253,10 +305,45 @@ class JointRos2Backend:
             self._next_plan_id += 1
         return chunk
 
+    def _eef_actions_to_joint_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Decode absolute EEF rows and solve them into gateway-ready joint rows."""
+
+        eef_ik = self._eef_ik
+        if eef_ik is None:
+            raise JointRos2BackendError("EEF IK is unavailable while action_space='eef'")
+        try:
+            _, _, closed_fractions = decode_eef_actions(actions)
+            snapshot = self.get_snapshot()
+            if not isinstance(snapshot, RosObservationSnapshot):
+                raise JointRos2BackendError("EEF action_space requires a Cartesian observation snapshot")
+            positions = np.asarray(
+                eef_ik.solve_actions(
+                    actions,
+                    measured_q=snapshot.qpos,
+                    measured_eef_position=snapshot.eef_position,
+                    measured_eef_quaternion_xyzw=snapshot.eef_quaternion_xyzw,
+                ),
+                dtype=np.float64,
+            )
+            expected_shape = (len(actions), len(self.config.arm_joint_names))
+            if positions.shape != expected_shape or not np.isfinite(positions).all():
+                raise EefIkError(f"IK result must be finite shape {expected_shape}, got {positions.shape}")
+            gripper, _, _, _ = closed_fraction_to_physical(
+                closed_fractions,
+                minimum=float(self.config.gripper_command_min_position),
+                maximum=float(self.config.gripper_command_max_position),
+            )
+        except JointRos2BackendError:
+            raise
+        except (EefIkError, ValueError, TypeError) as error:
+            raise JointRos2BackendError(f"Could not convert EEF action chunk: {error}") from error
+        return np.column_stack((positions, gripper))
+
     def disconnect(self) -> None:
         with self._lock:
             runtime = self._runtime
             self._runtime = None
+            self._eef_ik = None
             self._session_id = None
             self._last_bookkept_action = None
         try:

@@ -42,6 +42,36 @@ def _status(**overrides):
     return SimpleNamespace(**values)
 
 
+def test_eef_gripper_callback_projects_physical_position_to_closed_fraction() -> None:
+    updates = []
+    cache = SimpleNamespace(
+        update_gripper=lambda value, **metadata: updates.append((value, metadata))
+    )
+    runtime = object.__new__(JointRos2Runtime)
+    runtime.cache = cache
+    runtime.config = SimpleNamespace(
+        action_space="eef",
+        gripper_joint_name="robotiq_85_left_knuckle_joint",
+        gripper_command_min_position=0.0,
+        gripper_command_max_position=0.8,
+    )
+    runtime._last_callback_error = {}
+    runtime._node = None
+    message = SimpleNamespace(
+        name=["robotiq_85_left_knuckle_joint"],
+        position=[0.4],
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=20)),
+    )
+
+    runtime._gripper_joint_state_callback(message)
+
+    assert len(updates) == 1
+    value, metadata = updates[0]
+    assert value == 0.5
+    assert metadata["stamp_ns"] == 10_000_000_020
+    assert metadata["received_monotonic_ns"] > 0
+
+
 def test_active_plan_status_marks_progress_seen() -> None:
     progress = _PlanProgress("session", 7, time.monotonic(), ack_received=True)
     runtime = _runtime_with_progress(progress)

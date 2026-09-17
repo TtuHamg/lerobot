@@ -13,20 +13,15 @@ from lerobot.robots import RobotConfig
 @RobotConfig.register_subclass("franka_ros_joint")
 @dataclass(kw_only=True)
 class FrankaJointRosConfig(RobotConfig):
-    """Dry-run and non-actuating ROS2-interface configuration for the joint-space policy.
-
-    This mirrors :class:`FrankaRosConfig` but drops the Cartesian end-effector
-    inputs. FastWAM consumes the raw joint-space state (seven Franka joints plus
-    one raw gripper position) and produces absolute joint-space targets, so no
-    ``eef_pose`` topic or quaternion tolerance is required here.
-    """
+    """ROS2-interface configuration for q-pos or absolute EEF FastWAM policies."""
 
     dry_run: bool = True
     fixture_path: Path | None = None
     action_log_path: Path | None = None
+    action_space: str = "qpos"
 
     # ``dry_run=false`` only enables the isolated ROS interface.  It does not
-    # authorize a controller, IK implementation, or Franka actuation path.
+    # itself authorize the downstream safety gateway or Franka controller.
     ros2_interface_only: bool = True
     ros2_node_name: str = "lerobot_franka_joint_interface"
     action_chunk_topic: str = "/lerobot/franka/joint_action_chunk"
@@ -34,6 +29,7 @@ class FrankaJointRosConfig(RobotConfig):
     safety_gateway_status_topic: str = "/lerobot/franka/joint_safety_gateway_status"
     camera1_topic: str = "/camera1/camera1/color/image_raw"
     camera2_topic: str = "/camera2/camera2/color/image_raw"
+    eef_pose_topic: str = "/franka_robot_state_broadcaster/current_pose"
     qpos_topic: str = "/franka/joint_states"
     gripper_topic: str = "/gripper/joint_states"
     base_frame: str = "base"
@@ -50,6 +46,7 @@ class FrankaJointRosConfig(RobotConfig):
     observation_buffer_size: int = 32
     max_observation_age_s: float = 0.25
     camera2_max_skew_s: float = 0.05
+    eef_max_skew_s: float = 0.05
     qpos_max_skew_s: float = 0.1
     gripper_max_skew_s: float = 0.05
     # Forward inverse-normalized model gripper targets continuously, saturating
@@ -64,8 +61,23 @@ class FrankaJointRosConfig(RobotConfig):
     action_execution_timeout_s: float = 30.0
     ros2_shutdown_timeout_s: float = 5.0
 
+    # Used only for action_space=eef. The URDF is generated with hand=false;
+    # the live measured TCP pose is used to recover the fixed link8->EEF
+    # transform before each warm-started IK plan.
+    ik_urdf_path: Path = Path("~/franka/config/fr3_ik.urdf")
+    ik_tip_link: str = "fr3_link8"
+    ik_joint_limit_margin: float = 0.03
+    ik_posture_gain: float = 0.2
+    ik_tolerance: float = 1e-4
+    ik_max_iterations: int = 100
+    ik_damping: float = 1e-6
+
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.action_space not in {"qpos", "eef"}:
+            raise ValueError("action_space must be 'qpos' or 'eef'")
+        if self.dry_run and self.action_space != "qpos":
+            raise ValueError("dry_run currently supports only action_space='qpos'")
         if not self.dry_run:
             if not self.ros2_interface_only:
                 raise ValueError(
@@ -80,6 +92,7 @@ class FrankaJointRosConfig(RobotConfig):
             "safety_gateway_status_topic": self.safety_gateway_status_topic,
             "camera1_topic": self.camera1_topic,
             "camera2_topic": self.camera2_topic,
+            "eef_pose_topic": self.eef_pose_topic,
             "qpos_topic": self.qpos_topic,
             "gripper_topic": self.gripper_topic,
         }
@@ -99,6 +112,10 @@ class FrankaJointRosConfig(RobotConfig):
             raise ValueError("ros2_node_name must be a non-empty ROS node basename")
         if not isinstance(self.base_frame, str) or not self.base_frame:
             raise ValueError("base_frame must not be empty")
+        if not isinstance(self.ik_tip_link, str) or not self.ik_tip_link:
+            raise ValueError("ik_tip_link must not be empty")
+        if not isinstance(self.ik_urdf_path, Path):
+            self.ik_urdf_path = Path(self.ik_urdf_path)
         if len(self.arm_joint_names) != 7 or len(set(self.arm_joint_names)) != 7:
             raise ValueError("arm_joint_names must contain seven unique joint names")
         if any(not name for name in self.arm_joint_names):
@@ -137,6 +154,7 @@ class FrankaJointRosConfig(RobotConfig):
         positive_durations = {
             "max_observation_age_s": self.max_observation_age_s,
             "camera2_max_skew_s": self.camera2_max_skew_s,
+            "eef_max_skew_s": self.eef_max_skew_s,
             "qpos_max_skew_s": self.qpos_max_skew_s,
             "gripper_max_skew_s": self.gripper_max_skew_s,
             "action_chunk_validity_s": self.action_chunk_validity_s,
@@ -151,3 +169,32 @@ class FrankaJointRosConfig(RobotConfig):
                 or value <= 0.0
             ):
                 raise ValueError(f"{name} must be finite and greater than zero")
+
+        positive_ik_values = {
+            "ik_joint_limit_margin": self.ik_joint_limit_margin,
+            "ik_tolerance": self.ik_tolerance,
+            "ik_damping": self.ik_damping,
+        }
+        for name, value in positive_ik_values.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or not math.isfinite(float(value))
+                or value <= 0.0
+            ):
+                raise ValueError(f"{name} must be finite and greater than zero")
+        if self.ik_joint_limit_margin >= 0.1:
+            raise ValueError("ik_joint_limit_margin must be less than 0.1 rad")
+        if (
+            isinstance(self.ik_posture_gain, bool)
+            or not isinstance(self.ik_posture_gain, Real)
+            or not math.isfinite(float(self.ik_posture_gain))
+            or not 0.0 <= self.ik_posture_gain <= 1.0
+        ):
+            raise ValueError("ik_posture_gain must be finite and in [0, 1]")
+        if (
+            isinstance(self.ik_max_iterations, bool)
+            or not isinstance(self.ik_max_iterations, Integral)
+            or self.ik_max_iterations < 1
+        ):
+            raise ValueError("ik_max_iterations must be a positive integer")
