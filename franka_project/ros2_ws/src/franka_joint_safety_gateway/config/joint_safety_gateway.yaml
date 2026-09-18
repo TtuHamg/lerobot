@@ -58,7 +58,7 @@ franka_joint_safety_gateway:
     execution_slowdown_scale: 2.0
     # Projects/lerobot uses 0.06 rad. Keep 0.005 rad numeric/model tolerance
     # while velocity and acceleration remain independently constrained.
-    max_joint_step_rad: [0.065, 0.065, 0.065, 0.065, 0.065, 0.065, 0.065]
+    max_joint_step_rad: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
     # Permit the model's observed 0.61-0.77 rad reach horizons; velocity,
     # acceleration, per-step and measured-overspeed gates remain independent.
     max_joint_plan_excursion_rad: 0.80

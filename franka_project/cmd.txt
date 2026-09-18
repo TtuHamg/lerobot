@@ -125,11 +125,11 @@ bash /home/pnp/franka/rest_now.sh --no-gripper 2>&1 | tee /tmp/franka_rest_last.
   3. 再开一个终端，允许模型控制：
 
      bash franka_project/scripts/arm_joint_gateway.sh
-   
+EEF启动：  
 bash franka_project/scripts/run_joint_client.sh --eef "stack the red rectangular block on the tower"
 
      按脚本提示输入 ARM。此前机械臂会保持静止。
 
   结束时执行你已经验证有效的复位命令，它会先 disarm：
 
-  bash /home/pnp/franka/rest_now.sh --no-gripper
+  bash /home/pnp/franka/rest_now.sh
