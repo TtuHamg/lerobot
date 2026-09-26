@@ -6,19 +6,41 @@ ACTION_SPACE="${ACTION_SPACE:-qpos}"
 PROMPT="Pick up the cup."
 PROMPT_SET=false
 RECORD_VIDEO=true
-for arg in "$@"; do
+REPLAN_STEPS="${REPLAN_STEPS:-}"
+usage() {
+  echo "Usage: $0 [--qpos|--eef] [--replan N] [--record-video|--no-record-video] [prompt]"
+  echo "  --replan N: execute the first N of 32 predicted actions, then reobserve (1..32)."
+  echo "  Without --replan or REPLAN_STEPS, keep the existing full-chunk behavior."
+}
+while (($# > 0)); do
+  arg="$1"
   case "$arg" in
     --qpos) ACTION_SPACE=qpos ;;
     --eef) ACTION_SPACE=eef ;;
     --record-video) RECORD_VIDEO=true ;;
     --no-record-video) RECORD_VIDEO=false ;;
+    --replan)
+      if (($# < 2)) || [[ -z "$2" ]]; then
+        echo "ERROR: --replan requires an integer in 1..32"
+        exit 2
+      fi
+      REPLAN_STEPS="$2"
+      shift
+      ;;
+    --replan=*)
+      REPLAN_STEPS="${arg#*=}"
+      if [[ -z "$REPLAN_STEPS" ]]; then
+        echo "ERROR: --replan requires an integer in 1..32"
+        exit 2
+      fi
+      ;;
     --help)
-      echo "Usage: $0 [--qpos|--eef] [--record-video|--no-record-video] [prompt]"
+      usage
       exit 0
       ;;
     --*)
       echo "Unknown option: $arg"
-      echo "Usage: $0 [--qpos|--eef] [--record-video|--no-record-video] [prompt]"
+      usage
       exit 2
       ;;
     *)
@@ -30,10 +52,19 @@ for arg in "$@"; do
       PROMPT_SET=true
       ;;
   esac
+  shift
 done
 if [[ "$ACTION_SPACE" != "qpos" && "$ACTION_SPACE" != "eef" ]]; then
   echo "ERROR: ACTION_SPACE must be qpos or eef"
   exit 2
+fi
+CLIENT_REPLAN_ARGS=()
+if [[ -n "$REPLAN_STEPS" ]]; then
+  if [[ ! "$REPLAN_STEPS" =~ ^([1-9]|[12][0-9]|3[0-2])$ ]]; then
+    echo "ERROR: --replan / REPLAN_STEPS must be an integer in 1..32"
+    exit 2
+  fi
+  CLIENT_REPLAN_ARGS+=(--replan_steps="$REPLAN_STEPS")
 fi
 
 SERVER_ADDRESS="${SERVER_ADDRESS:-127.0.0.1:8081}"
@@ -268,6 +299,7 @@ fi
 cd "$REPO_ROOT"
 python -m lerobot_robot_franka_ros.joint_ros2_client \
   "${ROBOT_ARGS[@]}" \
+  "${CLIENT_REPLAN_ARGS[@]}" \
   --server_address="$SERVER_ADDRESS" \
   --policy_type=act \
   --pretrained_name_or_path=/dummy \
